@@ -1,0 +1,533 @@
+---
+title: "subset"
+author: "Kent Riemondy RBI"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    theme: cosmo
+    highlight: tango
+    fig_caption: true
+    code_folding: hide
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+```
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../R/utils.R")
+library(future)
+plan(strategy = "multicore", workers = 4)
+options(future.globals.maxSize = 2 * 1024 ^ 3)
+
+proj_dir <- here()
+data_dir <- file.path(proj_dir, "data", "cellranger")
+doc_dir <- file.path(proj_dir, "docs")
+
+fig_dir <- "figs"
+mkrs_dir <- "markers"
+walk(c(fig_dir,mkrs_dir), dir.create, showWarnings = F)
+
+#Sys.setenv(RETICULATE_PYTHON = "")
+# for louvain in monocle3
+# reticulate::py_config()
+ 
+#reticulate::use_python("/miniconda3/envs/py37/bin/python", required = TRUE)
+#reticulate::use_condaenv("py37", required = TRUE)
+Sys.setenv(RETICULATE_PYTHON = "/miniconda3/envs/py37/bin/python")
+reticulate::import("louvain")
+```
+
+```{r}
+sobj <- readRDS(file.path("objects", "sobj.rds"))
+```
+
+```{r,}
+
+ids <- c(8,
+  3,
+  13,
+  14,
+  20,
+  12)
+
+ids <- as.character(ids)
+
+cells <- rownames(sobj@meta.data)[sobj@meta.data$clusters %in% ids]
+
+sobj <- sobj[, cells]
+sobj <- FindVariableFeatures(sobj, 
+                             selection.method = "vst", 
+                             nfeatures = 3000, 
+                             verbose = FALSE)
+
+sobj <- ScaleData(sobj, 
+                  verbose = TRUE)
+
+sobj <- RunPCA(sobj, npcs = 40, verbose = FALSE)
+sobj <- RunUMAP(sobj, 
+                reduction = "pca", 
+                dims = 1:40, 
+                min.dist = 0.3, 
+                n.neighbors = 30L)
+
+sobj <- FindNeighbors(sobj,
+                      reduction = "pca",
+                      dims = 1:40,
+                      k.param = 20)
+
+sobj <- FindClusters(sobj, resolution = c(0.3, 0.2, 0.1))
+
+sobj$clusters <- sobj$RNA_snn_res.0.3
+sobj$seurat_clusters <- NULL
+ 
+plot_feature(sobj, "sample", embedding = "umap")
+plot_feature(sobj, "clusters", embedding = "umap")
+
+```
+
+Write out metadata
+```{r} 
+mdata_out <- get_metadata(sobj)
+outname <- file.path("tables", paste0("ameloblast_metadata_", format(Sys.Date(), "%Y_%m_%d"), ".tsv.gz"))
+write_tsv(mdata_out, outname)
+```
+
+## save merged object
+
+```{r}
+saveRDS(sobj, file.path("objects", "ablast_sobj.rds"))
+
+
+# drop graphs see https://github.com/theislab/scanpy/issues/598
+tmp_obj <- sobj
+tmp_obj@graphs <- list()
+lfile <- as.loom(tmp_obj,filename = file.path("objects", "ablast.loom"),
+        verbose = TRUE,
+        overwrite = TRUE)
+lfile$close_all()
+
+rm(tmp_obj)
+
+```
+
+## markers
+
+```{r}
+sobj <- readRDS(file.path("objects", "ablast_sobj.rds"))
+Idents(sobj) <- "clusters"
+
+mkrs <- FindAllMarkers(sobj, only.pos = TRUE)
+
+write_tsv(mkrs, file.path(mkrs_dir, "ablast_subset_cluster_markers.tsv"))
+mkrs <- read_tsv(file.path(mkrs_dir, "ablast_subset_cluster_markers.tsv"))
+
+list_of_markers <- map(split(mkrs, mkrs$cluster), 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each cluster compared to all other clusters",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers),
+                     "markers/ablast_subset_cluster_markers.xlsx")
+
+```
+
+## markers between samples
+
+```{r}
+sobj <- readRDS(file.path("objects", "ablast_sobj.rds"))
+sobj$tmp_id <- paste0(sobj$sample, "_cluster_", sobj$clusters)
+Idents(sobj) <- "tmp_id"
+
+mkrs_between_samples <- map(unique(sort(sobj$clusters)), 
+    function(x) {
+      ctrl <- paste0("control_cluster_", x) 
+      mutant <- paste0("mutant_cluster_", x)
+      
+      mkrs <- FindMarkers(sobj,
+                          ident.1 = mutant,
+                          ident.2 = ctrl,
+                          only.pos = FALSE)
+      mkrs <- mkrs %>% 
+        tibble::rownames_to_column("gene") %>% 
+        filter(p_val_adj < 0.01)
+      mkrs
+    })
+
+names(mkrs_between_samples) <- paste0("mutant_vs_control_cluster_",
+                                      unique(sort(sobj$clusters)))
+
+mkrs_between_samples_df <- bind_rows(mkrs_between_samples, 
+                                  .id = "cluster")
+write_tsv(mkrs_between_samples_df, 
+          file.path(mkrs_dir, "ablast_subset_cluster_markers_between_samples.tsv"))
+
+list_of_markers <- map(mkrs_between_samples, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each sample within each ameloblast cluster",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers),
+                     "markers/ablast_subset_cluster_markers_between_samples.xlsx")
+```
+
+## label cells
+
+
+
+"Early ameloblast stem cells" = Sox2, Pitx2
+"Transit amplifying cells: = Sfrp5
+Early ameloblasts = Mmp20
+Late ameloblasts = Klk4
+
+
+
+## Annotate cells with names
+
+```{r}
+library(clustifyr)
+library(ComplexHeatmap)
+tm_average <- readRDS("/Users/kriemo/Projects/sc_repos/vanotterloo/data/tabula_muris/TM_avg_expr.rds")
+
+mdata <- get_metadata(sobj)
+
+res <- clustify(sobj@assays$RNA@data, 
+                tm_average, 
+                query_genes = sobj@assays$RNA@var.features,
+                metadata = mdata, 
+                cluster_col = "clusters", 
+                compute_method = "spearman")
+
+hmap <- Heatmap(t(res), 
+                viridis::viridis(256), 
+                "Spearman\ncorrelation",
+                row_title = "Cell types from Tabula Muris",
+                column_title = "Clusters")
+
+pdf(file.path(fig_dir, "tm_cluster_hmap.pdf"), width = 8, height = 8)
+print(hmap)
+dev.off()
+```
+
+```{r}
+
+cluster_rename <- c(
+  "0" = "Krt17_progenitors",
+  "1" = "Sfrp5_TA",
+  "2" = "Tnc_quiescent",
+  "3" = "Mmp20_early_ameloblast",
+  "4" = "Krt15_progenitors",
+  "5" = "Notch_quiescent",
+  "6" = "Krt27_early_ameloblast",
+  "7" = "Mmp20_ameloblast_progenitor",
+  "8" = "Klk4_late_ameloblast"
+)
+
+sobj$cell_type <- factor(cluster_rename[sobj$clusters],
+                         levels = cluster_rename)
+```
+
+## Various UMAPs
+
+```{r}
+fig_dir <- "figs/subset"
+dir.create(fig_dir, showWarnings = FALSE, recursive = TRUE)
+
+```
+
+### Inferred cell type
+
+```{r}
+p <- plot_umap(sobj, "cell_type")
+p
+save_plot(file.path(fig_dir, 
+                    "umap_by_cell_type.pdf"),
+          p,
+          base_asp = 1.7)
+```
+
+### Genotype
+
+```{r}
+sobj$clusters <- as.character(sobj$clusters)
+p <- plot_features_split(sobj, "sample", "sample", add_title = FALSE) +
+  theme(legend.position = "none")
+p
+
+save_plot(file.path(fig_dir, 
+                    "umap_by_sample.pdf"),
+          p,nrow =1, ncol = 2,
+          base_asp = 1.0)
+```
+
+### Cell cycle phase
+
+```{r}
+p <- plot_umap(sobj, "Phase")
+
+save_plot(file.path(fig_dir, 
+                    "umap_by_cell_cyle.pdf"),
+          p,
+          base_asp = 1.3)
+
+```
+### Clustering overview
+
+```{r}
+sobj$clusters <- as.character(sobj$clusters)
+p <- plot_umap(sobj, "clusters", label_text = TRUE, label_color = "black")
+p
+save_plot(file.path(fig_dir, 
+                    "umap_each_cluster.pdf"),
+          p,
+          base_asp = 1.2)
+```
+
+### Markers per cluster
+```{r}
+mkrs <- read_tsv(file.path(mkrs_dir, "ablast_subset_cluster_markers.tsv"))
+top_n_genes <- group_by(mkrs, cluster) %>% 
+  arrange(p_val_adj, 
+          desc(pct.1),
+          .by_group = TRUE) %>% 
+  slice(1) %>% 
+  pull(gene)
+
+p <- map2(top_n_genes, 
+         0:(length(unique(mkrs$cluster)) - 1),
+    ~plot_umap(sobj, 
+               .x) +
+      labs(title = paste0("cluster ", .y))) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 3,
+            ncol = 3)
+p
+
+
+save_plot(file.path(fig_dir, 
+                    "umap_top_markers_per_cluster.pdf"),
+          p,
+          nrow = 3,
+          ncol = 3,
+          base_asp = 1.2)
+```
+
+
+### Specific genes
+
+```{r}
+to_plot <- c(
+  "Sox2",
+  "Pitx2",
+  "Sfrp5",
+  "Mmp20",
+  "Klk4"
+)
+
+p <- map(to_plot, 
+    ~plot_umap(sobj, 
+               .x)) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 2,
+            ncol = 3)
+p
+
+
+save_plot(file.path(fig_dir, 
+                    "umap_selected_markers.pdf"),
+          p,
+          nrow = 2,
+          ncol = 3,
+          base_asp = 1.2)
+
+```
+
+
+## Cell proportions
+
+## Cell proportions
+
+```{r}
+plt_dat <- sobj@meta.data %>% 
+  group_by(sample) %>% 
+  mutate(total_cells = n()) %>% 
+  group_by(sample, cell_type) %>% 
+  summarize(percent_of_cells = 100 * n() / unique(total_cells)) %>% 
+  spread(sample, percent_of_cells)
+
+p <- plt_dat %>% 
+  gather(genotype, percent, -cell_type) %>% 
+  ggplot(aes(cell_type, percent)) +
+  geom_col(aes(fill = genotype), position = position_dodge2()) +
+  scale_fill_manual(name = "", 
+                    values = palette_OkabeIto) +
+  labs(x = "",
+       y = "Percent of Cells") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+p
+
+save_plot(file.path(fig_dir, 
+                    "barplot_cell_percentages.pdf"),
+          p,
+          base_asp = 0.75,
+          base_height = 6)
+```
+
+
+
+## PAGA
+
+```{r}
+sobj <- readRDS(file.path("objects", "ablast_sobj.rds"))
+
+paga_res <- read_csv("velocity/paga_results.csv") %>% 
+  as.data.frame() %>% 
+  column_to_rownames("index")
+all(rownames(paga_res) == colnames(sobj))
+
+
+sobj <- AddMetaData(sobj, paga_res)
+
+ggplot(sobj@meta.data, 
+       aes(`X_draw_graph_fa-0`, `X_draw_graph_fa-1`)) +
+  geom_point(aes(color = as.character(clusters)))
+
+late_diff_axis <- c(
+  "7",
+  "8",
+  "3",
+  "6"
+)
+
+so <- subset(sobj, subset = clusters %in% late_diff_axis)
+
+so <- FindVariableFeatures(so, nfeatures = 3000)
+genes_to_test <- VariableFeatures(so)
+cnts <- GetAssayData(so, "data")[genes_to_test, ]
+ptime <- so$dpt_pseudotime_late_diff
+condition <- so$sample
+
+library(gam)
+
+# fit a GAM with a loess term for pseudotime
+# also use interaction term to find genes changing between genotypes
+gam_res <- apply(cnts, 1, function(z){
+    d <- data.frame(z = z, 
+                    ptime = ptime,
+                    condition = condition)
+    tmp <- suppressWarnings(gam(z ~ lo(ptime), data=d))
+    tmp2 <- suppressWarnings(gam(z ~ lo(ptime) + lo(ptime):condition, 
+                                 data=d))
+    pseudotime_effect <- summary(tmp)[4][[1]][1, 5]
+    condition_effect <- anova(tmp, tmp2, test = "Chisq")[2, "Pr(>Chi)"]
+    data.frame(pseudotime_effect, condition_effect)
+}) %>% 
+  bind_rows(.id = "gene")
+
+# adjust pvalues 
+ptime_late_diff_res <- mutate(gam_res, 
+              qval_pt = p.adjust(pseudotime_effect, method = "fdr"),
+              qval_condition = p.adjust(condition_effect, method = "fdr")) %>% 
+  arrange(qval_pt)
+
+
+early_diff_axis <- c(
+  "0",
+  "1",
+  "4",
+  "2",
+  "5"
+)
+
+so <- subset(sobj, subset = clusters %in% early_diff_axis)
+
+so <- FindVariableFeatures(so, nfeatures = 3000)
+genes_to_test <- VariableFeatures(so)
+cnts <- GetAssayData(so, "data")[genes_to_test, ]
+ptime <- so$dpt_pseudotime_early_diff
+condition <- so$sample
+
+library(gam)
+
+# fit a GAM with a loess term for pseudotime
+# also use interaction term to find genes changing between genotypes
+gam_res <- apply(cnts, 1, function(z){
+    d <- data.frame(z = z, 
+                    ptime = ptime,
+                    condition = condition)
+    tmp <- suppressWarnings(gam(z ~ lo(ptime), data=d))
+    tmp2 <- suppressWarnings(gam(z ~ lo(ptime) + lo(ptime):condition, 
+                                 data=d))
+    pseudotime_effect <- summary(tmp)[4][[1]][1, 5]
+    condition_effect <- anova(tmp, tmp2, test = "Chisq")[2, "Pr(>Chi)"]
+    data.frame(pseudotime_effect, condition_effect)
+}) %>% 
+  bind_rows(.id = "gene")
+
+# adjust pvalues 
+ptime_early_diff_res <- mutate(gam_res, 
+              qval_pt = p.adjust(pseudotime_effect, method = "fdr"),
+              qval_condition = p.adjust(condition_effect, method = "fdr")) %>% 
+  arrange(qval_pt)
+
+
+```
+
+

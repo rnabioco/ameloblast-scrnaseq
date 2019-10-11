@@ -1,0 +1,469 @@
+---
+title: "Figures"
+author: "Kent Riemondy RBI"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    theme: cosmo
+    highlight: tango
+    fig_caption: true
+    code_folding: hide
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+```
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../R/utils.R")
+library(future)
+plan(strategy = "multicore", workers = 4)
+options(future.globals.maxSize = 2 * 1024 ^ 3)
+
+proj_dir <- here()
+data_dir <- file.path(proj_dir, "data", "cellranger")
+doc_dir <- file.path(proj_dir, "docs")
+
+fig_dir <- "figs"
+mkrs_dir <- "markers"
+walk(c(fig_dir,mkrs_dir), dir.create, showWarnings = F)
+```
+
+```{r get_data}
+samples <- c("1_control", "2_mutant")
+
+sobj <- readRDS(file.path("objects", "unfiltered.rds"))
+```
+
+## Experiment description
+
+Murine ameloblast cell lineages from wild type or Memo1 mutant mice. 
+
+Research Plan from proposal: 
+
+
+>
+Research Plan: We will use a single-cell RNA sequencing based approach of the mouse ameloblast lineage from both a control and AI-modeled (Memo1:K14CRE) incisor. Owing to the ever-growing nature of the mouse incisor throughout the organism’s life, it provides an ideal platform to capture all stages of ameloblast development [2]. Note, mice for sample 1 and sample 2 will be collected and processed at identical time-points. Briefly, the genetics will include crossing a Memo1flox/wt;K14CRE male with both an mT/mG female and a Memo1flox/flox;mT/mG female, with pups generated from these crosses collected at P9 for subsequent processing (below). AIM 1A, [SAMPLE 1]: To address the number of cellular subdomains that exist within the ameloblast lineage, a control pup, as described above, will be collected and processed. The K14CRE transgene is expressed in the dental epithelium and is routinely used to target the ameloblast lineage [3]. In combination with the mT/mG mouse line, all ameloblast cells will be labeled with a tomato-fluorescent reporter, while non-ameloblast cells will remain GFP+. Following euthanasia, the lower-jaw will be removed and incisors (N=2) micro-dissected from surrounding tissue. The samples will be dissociated into a single-cell suspension utilizing cold trypsin/EDTA, washed with DMEM, and subsequently transported to the CU-FLOW facility for FACS processing of tomato+ cells. Once collected, cells will be transported to the Genomics Core for additional processing. AIM 1B [SAMPLE 2]: To address the impact AI pathogenesis may have on the ameloblast cellular subdomains, we will utilize an identical set-up and processing pipeline to that of SAMPLE 1, with the exception that the ameloblast lineage will also be ‘null’ for the gene Memo1 – an intracellular signaling protein which we have identified to be essential within the ameloblast lineage for enamel formation in mice. Despite enamel defects in Memo1:K14CRE mice, basic histology of the developing incisors reveals the continued presence of the ameloblast lineage, making it an ideal AI model to investigate its impact on the defined ameloblast subpopulations in AIM 1A.
+>
+
+
+## General library statistics  {.tabset}
+
+Overall the single cell libraries are high quality. Click on the tabs below to view specific information abotu the libraries. 
+
+The only concern apparent from the library QC is the high cell #s captured. At this capture rate one would expect ~ >8% doublet rate.
+
+```{r }
+
+metrics_paths <- file.path(data_dir,
+                          samples,
+                          "outs", 
+                          "metrics_summary.csv")
+
+names(metrics_paths) <- samples
+
+mapping_dat <- map_dfr(metrics_paths, read_csv, .id = "sample")
+
+clean_up_metadata <- function(metrics_summary) {
+  metrics_summary <- mutate_all(metrics_summary, str_remove, "%$")
+  metrics_summary <- mutate_at(metrics_summary, .vars= 2:ncol(metrics_summary), as.numeric)
+  metrics_summary
+}
+
+mapping_dat <- clean_up_metadata(mapping_dat)
+
+metrics <- colnames(mapping_dat)[2:ncol(mapping_dat)]
+
+mapping_dat <- mapping_dat %>% 
+  gather(metric, value, -sample) %>% 
+  mutate(sample = factor(sample, levels = unique(sample)))
+
+p <- map(metrics, 
+    function(x) {
+    filter(mapping_dat, metric == x) %>% 
+          ggplot(aes(sample, value)) +
+            geom_point(aes(color = sample)) +
+        scale_color_brewer(palette = "Paired") + 
+        labs(y = x, 
+             x = "") +
+        theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+}) 
+
+```
+
+```{r, results ='asis'}
+
+for(i in seq_along(p)){
+  cat('\n### ', metrics[i], '\n')
+  print(p[i])
+  cat('\n')
+}
+```
+
+
+
+## General QC metrics {.tabset}
+The cells appear to be generally high quality, indicated by the low % of mitochondiral UMIs present in the data. Lysed cells will have lower UMIs and higher % mitochondial UMIs, due to loss of cytoplasmic mRNAs and retenion of mitochondrial enriched RNAs. These cells look alright, with only minor filtering necessary to exclude outliers. 
+
+### Percent Mitochondrial UMIs 
+
+```{r}
+plot_violin(sobj@meta.data, "orig.ident", "percent.mt", .fill = "orig.ident") +
+  labs(x = "", y = "Percent UMIs from Mitochondria")
+```
+
+
+### # of genes detected 
+
+```{r}
+plot_violin(sobj@meta.data, "orig.ident", "nFeature_RNA", .fill = "orig.ident") +
+  labs(x = "", y = "# of genes per cell")
+```
+
+
+### # of UMIs detected
+
+```{r}
+plot_violin(sobj@meta.data, "orig.ident", "nCount_RNA", .fill = "orig.ident") +
+  labs(x = "", y = "# of UMIs") +
+  scale_y_log10()
+```
+
+### Table of mitochondrial proportions per sample
+
+```{r}
+sobj@meta.data %>% 
+  group_by(sample) %>% 
+  summarize(median_percent_mito = median(percent.mt), 
+            mean_percent_mito = mean(percent.mt)) %>% 
+  arrange(desc(median_percent_mito))
+
+```
+
+
+## Relationship between UMIs and # of genes {.tabset}
+
+### All samples
+```{r, fig.width = 12, fig.height = 8}
+sample_names <- unique(sobj$sample)
+per_sample <- map(sample_names, ~filter(sobj@meta.data, 
+                                        sample == .x))
+p <- list()
+for(i in seq_along(per_sample)){
+  .col <- discrete_palette_default[i]
+  p[[i]] <- ggplot(per_sample[[i]], aes(nFeature_RNA, nCount_RNA)) +
+        geom_point(aes(color = sample)) +
+        scale_color_manual(values = .col)
+}
+
+plot_grid(plotlist= p, nrow = 1, ncol = 2)
+```
+
+```{r, results ='asis'}
+# generate tab with individual plot programmatically 
+# see https://stackoverflow.com/questions/43752095/programmatically-insert-header-and-plot-in-same-code-chunk-with-r-markdown-using?noredirect=1&lq=1
+
+for(i in seq_along(per_sample)){
+  .col <- discrete_palette_default[i]
+  cat('\n### ', sample_names[i], '\n')
+  p <- ggplot(per_sample[[i]], aes(nFeature_RNA, nCount_RNA)) +
+        geom_point(aes(color = sample)) +
+        scale_color_manual(values = .col)
+  print(p)
+  cat('\n')
+}
+```
+
+
+
+## Relationship between UMIs and % mitochondria {.tabset}
+
+### All samples
+```{r, fig.width = 12, fig.height = 8}
+sample_names <- unique(sobj$sample)
+per_sample <- map(sample_names, ~filter(sobj@meta.data, 
+                                        sample == .x))
+p <- list()
+for(i in seq_along(per_sample)){
+  .col <- discrete_palette_default[i]
+  p[[i]] <- ggplot(per_sample[[i]], aes(nCount_RNA, percent.mt)) +
+        geom_point(aes(color = sample)) +
+        scale_color_manual(values = .col)
+}
+
+plot_grid(plotlist= p, nrow = 1, ncol = 2)
+```
+
+```{r, results ='asis'}
+
+# generate tab with individual plot programmatically 
+# see https://stackoverflow.com/questions/43752095/programmatically-insert-header-and-plot-in-same-code-chunk-with-r-markdown-using?noredirect=1&lq=1
+
+for(i in seq_along(per_sample)){
+  .col <- discrete_palette_default[i]
+  cat('\n### ', sample_names[i], '\n')
+  p <- ggplot(per_sample[[i]], aes(nCount_RNA, percent.mt)) +
+        geom_point(aes(color = sample)) +
+        scale_color_manual(values = .col)
+  print(p)
+  cat('\n')
+}
+```
+
+
+
+
+
+## Filter cells and samples.
+
+I suggest excluding cells with > 30% mitochondrial UMIs and > 50K UMIs at this time. Additional more nuanced filtering can be applied at a later date as necessary.
+
+
+
+
+```{r}
+sobj <- readRDS(file.path("objects", "sobj.rds"))
+```
+
+Shown below are the number of cells remaining in each sample post filtering. There are `r nrow(sobj@meta.data)` total cells in the dataset post filtering. 
+
+```{r, ncells_post_filtering, fig.caption = "Number of cells per sample remaining after filtering"}
+group_by(sobj@meta.data, sample) %>% 
+  summarize(n_cells = n())
+```
+
+
+## Normalize and embed into 2D with UMAP {.tabset}
+
+All the cells passing initial QC are embedded into 2 dimensions using the UMAP algorithm. Shown below are the 2D projections with cells labeled by the sample. I've additionally plotted the number of UMIs per cell, and the percentage of reads derived from mitochondrial reads. 
+
+
+### By sample
+```{r}
+p <- plot_feature(sobj, "sample", pt_alpha = 0.75, embedding = "umap")
+p
+save_plot(file.path(fig_dir,"umap_by_sample.pdf"), p, base_asp = 1.75)
+```
+
+### Number of UMIs
+
+```{r}
+p <- plot_feature(sobj, "nCount_RNA", embedding = "umap")
+p
+save_plot(file.path(fig_dir,"umap_by_nUMI.pdf"), p, base_asp = 1.75)
+```
+
+### Percent Mitochondria
+
+```{r}
+p <- plot_feature(sobj, "percent.mt", embedding = "umap")
+p
+save_plot(file.path(fig_dir,"umap_by_pt_mitochondria.pdf"), p, base_asp = 1.75)
+```
+
+
+## Clustering and finding markers per cluster 
+
+Next I've done some preliminary clustering to try to identify cell types. Note that the number of clusters identified here can be changed depending on the biological question. For now we are just trying to get a general sense of what cell types are in the data. 
+
+
+```{r}
+p <- plot_umap(sobj, "clusters", pt_alpha = 0.75)
+p
+save_plot(file.path(fig_dir,"umap_by_clusters.pdf"),
+          p, base_asp = 1.75)
+```
+
+I've generated an excel spreadsheet (named `markers_per_cluster.xlsx`) with a list of markers for each cluster as a seperate sheet. Each sheet shows the differentially expressed genes between each cluster and all other cells ranked by adjusted p-values. 
+
+Shown below is dotplot showing the top 5 marker genes for each cluster. 
+
+```{r}
+markers <- read_tsv("markers/per_cluster_markers.tsv")
+topx <- markers %>% 
+  group_by(cluster) %>% 
+  top_n(5, avg_logFC) 
+```
+
+```{r, fig.width = 20, fig.height= 20}
+# not sure why the factor type was changed...
+sobj$clusters <- factor(sobj@meta.data$clusters, levels = as.character(c(0:23)))
+
+p <- DotPlot(sobj, 
+        features = unique(topx$gene),
+        group.by = "clusters") +
+  coord_flip() +
+  labs(x = "Cluster",
+       y = "")
+
+
+p
+
+save_plot(file.path(fig_dir, "marker_dotplot.pdf"), 
+          p, base_height = 18, base_asp = 1)
+```
+
+```{r}
+
+list_of_markers <- split(markers, markers$cluster)
+names(list_of_markers) <- str_c("cluster_", names(list_of_markers))
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each cluster and all other cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers),
+                     "markers/markers_per_cluster.xlsx")
+```
+
+
+## Try to assign cell types using cell atlas data
+
+The [`Tabula Muris`](https://tabula-muris.ds.czbiohub.org/) is a collection of single cell dataset from 20 organs. 
+
+We will use the gene expression profiles from these datasets to try to assign cell types to the identified clusters. The `clustifyr` package will correlate experession in our clusters to the tabula muris and report the most correlated cell type. It's unlikely that these will be 100% correct, because I don't believe that the tabula muris will have all of the cell types in a mouse, and I don't believe hat they have cells from developing tissues. Nevertheless it will give us a good starting point to annotating the cell types. 
+
+```{r, fig.width=8, fig.height=12}
+library(clustifyr)
+library(ComplexHeatmap)
+
+tm_average <- readRDS("/Users/kriemo/Projects/sc_repos/vanotterloo/data/tabula_muris/TM_avg_expr.rds")
+
+mdata <- get_metadata(sobj)
+
+res <- clustify(sobj@assays$RNA@data, 
+                tm_average, 
+                query_genes = sobj@assays$RNA@var.features,
+                metadata = mdata, 
+                cluster_col = "clusters", 
+                compute_method = "spearman")
+
+hmap <- Heatmap(t(res), 
+                viridis::viridis(256), 
+                "Spearman\ncorrelation",
+                row_title = "Cell types from Tabula Muris",
+                column_title = "Clusters")
+  
+pdf("figs/cell_type_heatmap.pdf", height = 12, width = 12)
+draw(hmap)
+dev.off()
+
+hmap
+```
+
+As you can see the cell types aren't perfect, so manual annotation will be necessary. 
+
+```{r}
+p <- plot_umap(sobj, "tabula_muris_cell_type", pt_alpha = 0.75)
+p
+save_plot(file.path(fig_dir,"umap_by_cell_type.pdf"),
+          p, base_asp = 1.75)
+
+```
+
+
+## Cell cycle
+
+Lastly, I've examined and annotated the cell cycle phase for each cell. This can be useful to determine if differences in cell cycle are driving clustering patterns. 
+
+
+```{r fig.width = 12}
+cc_scores <- c(
+   "Phase",
+  "S.Score",
+  "G2M.Score"
+)
+
+plts <- map(cc_scores, ~plot_feature(sobj, .x, embedding = "umap"))
+plt <- plot_grid(plotlist = plts, nrow = 1, ncol = 3)
+plt
+
+save_plot(file.path(fig_dir,"umap_by_cell_cycle.pdf"),
+          plt, base_asp = 1.75, nrow = 1, ncol = 3)
+```
+
+
+
+## Examine sex specific difference
+The mice used for the experiment are from different sexes. To try to exclude the sex effect from the data I will examine genes consistently differentailly expressed aross all clusters. These will be ignored from future analysis
+
+
+```{r}
+sobj$tmp_id <- paste0(sobj$sample, "_cluster_", sobj$clusters)
+Idents(sobj) <- "tmp_id"
+
+mkrs_between_samples <- map(unique(sort(sobj$clusters)), 
+    function(x) {
+      ctrl <- paste0("control_cluster_", x) 
+      mutant <- paste0("mutant_cluster_", x)
+      
+      mkrs <- FindMarkers(sobj,
+                          ident.1 = mutant,
+                          ident.2 = ctrl,
+                          only.pos = FALSE)
+      mkrs <- mkrs %>% 
+        tibble::rownames_to_column("gene") %>% 
+        filter(p_val_adj < 0.01)
+      mkrs
+    })
+
+names(mkrs_between_samples) <- paste0("mutant_vs_control_cluster_",
+                                      unique(sort(sobj$clusters)))
+
+mkrs_between_samples_df <- bind_rows(mkrs_between_samples, 
+                                  .id = "cluster")
+
+dimorphic_genes <- mkrs_between_samples_df %>%
+  group_by(gene) %>% 
+  summarize(n = n(), 
+            clusts = paste0(str_remove(cluster, "mutant_vs_control_cluster_"),
+                            collapse = ",")) %>%
+  ungroup() %>% 
+  arrange(desc(n)) %>% 
+  slice(1:9) %>% 
+  pull(gene)
+            
+                                                                                                                                        
+write_lines(dimorphic_genes, 
+          file.path(mkrs_dir, "dimorphic_genes_across_dataset.txt"))
+
+```
+
+## UCSC cellbrowser
+
+An interactive cellbrowser has been set up at this URL:
+      
+[Cellbrowser](https://data.cyverse.org/dav-anon/iplant/home/kriemo/data/browsers/ablast/index.html)
+
+
