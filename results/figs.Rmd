@@ -246,9 +246,29 @@ All the cells passing initial QC are embedded into 2 dimensions using the UMAP a
 
 ### By sample
 ```{r}
-p <- plot_feature(sobj, "sample", pt_alpha = 0.75, embedding = "umap")
+p <- plot_feature(sobj,
+                  "sample", 
+                  .cols = palette_OkabeIto,
+                  pt_alpha = 1, 
+                  embedding = "umap",
+                  sorted = "random",
+                  legend_title = "")
 p
-save_plot(file.path(fig_dir,"umap_by_sample.pdf"), p, base_asp = 1.75)
+save_plot(file.path(fig_dir,"umap_by_sample.pdf"), p, base_asp = 1.2)
+
+
+p <- plot_feature(sobj,
+                  "sample", 
+                  group = "sample",
+                  .cols = palette_OkabeIto,
+                  pt_alpha = 1, 
+                  embedding = "umap",
+                  sorted = "random",
+                  legend_title = "")
+p
+save_plot(file.path(fig_dir,"umap_by_sample_split.pdf"),
+          p, 
+          base_asp = 1.75)
 ```
 
 ### Number of UMIs
@@ -274,10 +294,25 @@ Next I've done some preliminary clustering to try to identify cell types. Note t
 
 
 ```{r}
-p <- plot_umap(sobj, "clusters", pt_alpha = 0.75)
+p <- plot_umap(sobj, "clusters",
+               pt_alpha = 1, 
+               sorted = "random", 
+               legend_title = "")
 p
 save_plot(file.path(fig_dir,"umap_by_clusters.pdf"),
-          p, base_asp = 1.75)
+          p, base_asp = 1.33)
+
+p <- plot_feature(sobj,
+                  "clusters", 
+                  group = "sample",
+                  pt_alpha = 1, 
+                  embedding = "umap",
+                  sorted = "random",
+                  legend_title = "")
+p
+save_plot(file.path(fig_dir,"umap_by_clusters_split.pdf"),
+          p, 
+          base_asp = 1.75)
 ```
 
 I've generated an excel spreadsheet (named `markers_per_cluster.xlsx`) with a list of markers for each cluster as a seperate sheet. Each sheet shows the differentially expressed genes between each cluster and all other cells ranked by adjusted p-values. 

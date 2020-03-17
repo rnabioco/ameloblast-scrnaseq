@@ -1,7 +1,7 @@
 ---
 title: "Format UCSC cellbrowser"
 author: "Kent Riemondy RBI"
-date: "5/17/2019"
+date: "`R Sys.Date()`"
 output: html_document
 ---
 
@@ -14,15 +14,25 @@ knitr::opts_chunk$set(echo = TRUE)
 Format seurat object into a cellbrowser directory suitable for html browser. 
 
 ```{r}
-source("../R/utils.R")
+library(scbp)
 library(tidyverse)
-sobj <- readRDS(file.path("objects", "sobj.rds"))
 ```
 
-Simplify object metadata to make interpretable
+```{R}
+cb_outdir <- "cellbrowser_v2"
+
+def_embeddings <- function(so) {
+  # keep everything except PCA
+  reductions <- names(so@reductions)
+  reductions[!str_detect(reductions, "pca")]}
+```
+
+# All cells
+
 
 ```{r}
-cols <- colnames(sobj@meta.data)
+so <- readRDS(file.path("objects", "sobj.rds"))
+
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
   `UMIs per cell` = "nCount_RNA",
@@ -32,109 +42,29 @@ cols_to_keep <- c(
   `cell cycle phase` = "Phase",
   `Tabula Muris cell type` = "tabula_muris_cell_type"
 )
-sobj@meta.data <- sobj@meta.data[, cols_to_keep]
-colnames(sobj@meta.data) <- names(cols_to_keep)
-Idents(sobj) <- "clusters"
 
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 # secondary_cols = c(
+                 #    "subgroup",
+                 #    "cell_type"), 
+                 project = "ameloblasts",
+                 outdir = cb_outdir,
+                 marker_file = "markers/per_cluster_markers.tsv",
+                 ident = "clusters",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = TRUE,
+                 description = list(title = "Amelogenesis",
+                                    description = "Developing mouse incisor lineages")
+                 )
 ```
 
+## Just ameloblasts
 
 
 ```{r}
-outdir <- "cellbrowser"
-dir.create(outdir, showWarnings = FALSE)
-# write out rds files with names listed in sobjs
-saveRDS(sobj,file.path(outdir, "cb.rds"))
-```
+so <- readRDS(file.path("objects", "ablast_sobj.rds"))
 
-## Set colors
-
-```{r}
-## default palette (see ../../R/globals.R)
-col_palette <- discrete_palette_default
-
-## summarize per cluster annotations
-to_map <- c("clusters",
-            "sample",
-            "Tabula Muris cell type",
-            "cell cycle phase")
-col_map <- as.list(sobj@meta.data[, to_map]) %>%
-      map(~as.character(unique(.x)))
-
-res <- list()
-
-tmp <- col_palette[1:length(col_map$clusters)]
-names(tmp) <- col_map$clusters
-res$clusters <- tmp 
-
-tmp <- col_palette[1:length(col_map$sample)]
-names(tmp) <- col_map$sample
-res$sample <- tmp 
-
-tmp <- col_palette[1:length(col_map$`Tabula Muris cell type`)]
-names(tmp) <- col_map$`Tabula Muris cell type`
-res$`Tabula Muris cell type` <- tmp 
-
-tmp <- col_palette[1:length(col_map$`cell cycle phase`)]
-names(tmp) <- col_map$`cell cycle phase`
-res$`cell cycle phase` <- tmp 
-
-
-map_dfr(res, 
-        ~tibble(clusterName = names(.x), 
-                color = .x)) %>% 
-  as.data.frame() %>% 
-  write_csv("cellbrowser/colorMap.csv", col_names = F, quote_escape = "none")
-
-```
-
-
-Build cellbrowser objects. Note requires UCSC (`cellbrowser python package`[ https://cellbrowser.readthedocs.io/index.html])
-
-```{r}
-dir.create("cellbrowser/markers", recursive = TRUE)
-cols <- colnames(sobj@meta.data)
-names(cols) <- colnames(sobj@meta.data)
-mkrs <- read_tsv("markers/per_cluster_markers.tsv") %>% 
-  select(cluster, gene, p_val_adj, everything())
-
-write_tsv(mkrs, "cellbrowser/markers/cluster_markers.tsv")
-
-do.call(function(...) {ExportToCellbrowser(sobj, 
-                    dir = file.path("cellbrowser", "ameloblast"),
-                    dataset.name = "ameloblasts",
-                    reductions = c("umap"),
-                    markers.file = "cellbrowser/markers/cluster_markers.tsv",
-                    cluster.field = "clusters",
-                    ...)}, 
-        as.list(cols))
-
-```
-
-
-
-```{bash}
-cd cellbrowser
-echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/vanotterloo/results/cellbrowser/colorMap.csv"' >> ameloblast/cellbrowser.conf
-```
-
-
-```{bash}
-cd cellbrowser
-/miniconda3/bin/cbBuild \
-  -i ameloblast/cellbrowser.conf \
-  -o ablast
-```
-
-
-
-
-
-Add subset
-
-```{r}
-sobj <- readRDS(file.path("objects", "ablast_sobj.rds"))
-cols <- colnames(sobj@meta.data)
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
   `UMIs per cell` = "nCount_RNA",
@@ -142,100 +72,129 @@ cols_to_keep <- c(
   `clusters` = "clusters",
   `sample` = "orig.ident",
   `cell cycle phase` = "Phase",
-  `Tabula Muris cell type` = "tabula_muris_cell_type"
+  `Tabula Muris cell type` = "tabula_muris_cell_type",
+  `Preliminary cell type` = "cell_type",
+  CytoTRACE = "CytoTRACE",
+  Pseudotime_early_diff = "dpt_pseudotime_early_diff",
+  Pseudotime_late_diff = "dpt_pseudotime_late_diff"
 )
-sobj@meta.data <- sobj@meta.data[, cols_to_keep]
-colnames(sobj@meta.data) <- names(cols_to_keep)
-Idents(sobj) <- "clusters"
 
+ncb_modules <- str_subset(colnames(so@meta.data), "Sharir_et_al")
+names(ncb_modules) <- ncb_modules
+
+
+cols_to_keep <- c(cols_to_keep, ncb_modules)
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 project = "ameloblasts_subset",
+                 outdir = cb_outdir,
+                 marker_file = "markers/ablast_subset_cell_type_markers.tsv",
+                 ident = "Preliminary cell type",
+                 embeddings = c("umap", "paga_umap", "paga_fdg"),
+                 skip_expr_matrix = TRUE,
+                 description = list(title = "Ameloblast lineage",
+                                    description = "Subset of cells involved in ameloblast differentiation"),
+                 config = list(priority = 1)
+                 )
 ```
 
+
+## Just ameloblasts early
 
 
 ```{r}
-outdir <- "cellbrowser"
-dir.create(outdir, showWarnings = FALSE)
-# write out rds files with names listed in sobjs
-saveRDS(sobj,file.path(outdir, "cb_subset.rds"))
+so <- qs::qread(file.path("objects", "ameloblast_early_diff.rds"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "refined_ameloblast_early_clusters",
+  `sample` = "orig.ident",
+  `cell cycle phase` = "Phase",
+  `Tabula Muris cell type` = "tabula_muris_cell_type",
+  `Preliminary cell type` = "cell_type",
+  CytoTRACE = "CytoTRACE",
+  Pseudotime_early_diff = "dpt_pseudotime_early_diff",
+  Pseudotime_late_diff = "dpt_pseudotime_late_diff"
+)
+
+ncb_modules <- str_subset(colnames(so@meta.data), "Sharir_et_al")
+names(ncb_modules) <- ncb_modules
+
+cols_to_keep <- c(cols_to_keep, ncb_modules)
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 project = "ameloblasts_subset_early",
+                 outdir = cb_outdir,
+                 marker_file = "markers/ameloblast_early_diff_only/refined_ameloblast_early_clusters.tsv",
+                 ident = "clusters",
+                 embeddings = c("harmony_umap"),
+                 skip_expr_matrix = FALSE,
+                 description = list(title = "Ameloblast lineage",
+                                    description = "Subset of cells involved in ameloblast differentiation"),
+                 config = list(priority = 3)
+                 )
 ```
 
-## Set colors
+
+## Just ameloblasts late
+
 
 ```{r}
-## default palette (see ../../R/globals.R)
-col_palette <- discrete_palette_default
+so <- qread(file.path("objects", "ameloblast_late_diff.rds"))
 
-## summarize per cluster annotations
-to_map <- c("clusters",
-            "sample",
-            "Tabula Muris cell type",
-            "cell cycle phase")
-col_map <- as.list(sobj@meta.data[, to_map]) %>%
-      map(~as.character(unique(.x)))
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "refined_ameloblast_clusters",
+  `sample` = "orig.ident",
+  `cell cycle phase` = "Phase",
+  `Tabula Muris cell type` = "tabula_muris_cell_type",
+  `Preliminary cell type` = "cell_type",
+  CytoTRACE = "CytoTRACE",
+  Pseudotime_early_diff = "dpt_pseudotime_early_diff",
+  Pseudotime_late_diff = "dpt_pseudotime_late_diff"
+)
 
-res <- list()
-
-tmp <- col_palette[1:length(col_map$clusters)]
-names(tmp) <- col_map$clusters
-res$clusters <- tmp 
-
-tmp <- col_palette[1:length(col_map$sample)]
-names(tmp) <- col_map$sample
-res$sample <- tmp 
-
-tmp <- col_palette[1:length(col_map$`Tabula Muris cell type`)]
-names(tmp) <- col_map$`Tabula Muris cell type`
-res$`Tabula Muris cell type` <- tmp 
-
-tmp <- col_palette[1:length(col_map$`cell cycle phase`)]
-names(tmp) <- col_map$`cell cycle phase`
-res$`cell cycle phase` <- tmp 
+ncb_modules <- str_subset(colnames(so@meta.data), "Sharir_et_al")
+names(ncb_modules) <- ncb_modules
 
 
-map_dfr(res, 
-        ~tibble(clusterName = names(.x), 
-                color = .x)) %>% 
-  as.data.frame() %>% 
-  write_csv("cellbrowser/colorMap_subset.csv", col_names = F, quote_escape = "none")
+cols_to_keep <- c(cols_to_keep, ncb_modules)
 
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 project = "ameloblasts_subset_late",
+                 outdir = cb_outdir,
+                 marker_file = "markers/ameloblast_late_diff_only/refined_ameloblast_clusters.tsv",
+                 ident = "clusters",
+                 embeddings = c("harmony_umap"),
+                 skip_expr_matrix = FALSE,
+                 description = list(title = "Ameloblast lineage",
+                                    description = "Subset of cells involved in late ameloblast differentiation"),
+                 config = list(priority = 4)
+                 )
 ```
 
 
-Build cellbrowser objects. Note requires UCSC (`cellbrowser python package`[ https://cellbrowser.readthedocs.io/index.html])
+## Build all
 
 ```{r}
-dir.create("cellbrowser/markers", recursive = TRUE)
-cols <- colnames(sobj@meta.data)
-names(cols) <- colnames(sobj@meta.data)
-mkrs <- read_tsv("markers/ablast_subset_cluster_markers.tsv") %>% 
-  select(cluster, gene, p_val_adj, everything())
+cb_dirs <- c(
+  "ameloblasts_subset",
+  "ameloblasts",
+  "ameloblasts_subset_early",
+  "ameloblasts_subset_late"
+)
+cb_dirs <- file.path(cb_outdir, 
+                     cb_dirs,
+                     "cellbrowser.conf")
 
-write_tsv(mkrs, "cellbrowser/markers/subset_cluster_markers.tsv")
-
-do.call(function(...) {ExportToCellbrowser(sobj, 
-                    dir = file.path("cellbrowser", "ameloblast_subset"),
-                    dataset.name = "ameloblasts_subset",
-                    reductions = c("umap"),
-                    markers.file = "cellbrowser/markers/subset_cluster_markers.tsv",
-                    cluster.field = "clusters",
-                    ...)}, 
-        as.list(cols))
-
+build_cellbrowser(cb_dirs, 
+                  file.path(cb_outdir, "ablast"))
+  
 ```
-
-
-
-```{bash}
-cd cellbrowser
-echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/vanotterloo/results/cellbrowser/colorMap_subset.csv"' >> ameloblast_subset/cellbrowser.conf
-```
-
-
-```{bash}
-cd cellbrowser
-/miniconda3/bin/cbBuild \
-  -i ameloblast/cellbrowser.conf \
-  -i ameloblast_subset/cellbrowser.conf \
-  -o ablast
-```
-

@@ -21,7 +21,10 @@ knitr::opts_chunk$set(echo = TRUE,
 ```
 
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
-source("../R/utils.R")
+library(scbp)
+library(tidyverse)
+library(cowplot); theme_set(theme_cowplot())
+library(here)
 library(future)
 plan(strategy = "multicore", workers = 4)
 options(future.globals.maxSize = 2 * 1024 ^ 3)
@@ -281,6 +284,22 @@ cluster_rename <- c(
 
 sobj$cell_type <- factor(cluster_rename[sobj$clusters],
                          levels = cluster_rename)
+
+library(presto)
+cell_type_markers <- wilcoxauc(sobj, "cell_type")
+
+cell_type_markers <- dplyr::filter(cell_type_markers, 
+                                   logFC > 0,
+                                   padj < 0.01, 
+                                   pct_in > 10) %>%   
+  dplyr::group_by(group) %>% 
+  dplyr::arrange(padj, desc(logFC), .by_group = TRUE)
+
+write_tsv(cell_type_markers,
+          file.path(mkrs_dir, "ablast_subset_cell_type_markers.tsv"))
+          
+write_markers_xlsx(split(cell_type_markers, cell_type_markers$group),
+                   file.path(mkrs_dir, "ablast_subset_cell_type_markers.xlsx"))
 ```
 
 ## Various UMAPs
@@ -294,7 +313,7 @@ dir.create(fig_dir, showWarnings = FALSE, recursive = TRUE)
 ### Inferred cell type
 
 ```{r}
-p <- plot_umap(sobj, "cell_type")
+p <- plot_umap(sobj, "cell_type", legend_title = "", sorted = "random")
 p
 save_plot(file.path(fig_dir, 
                     "umap_by_cell_type.pdf"),
@@ -302,17 +321,143 @@ save_plot(file.path(fig_dir,
           base_asp = 1.7)
 ```
 
+```{r}
+p <- plot_umap(sobj, 
+               "cell_type", 
+               legend_title = "", 
+               sorted = "random", 
+               group = "sample")
+p
+save_plot(file.path(fig_dir, 
+                    "umap_by_cell_type_split.pdf"),
+          p,ncol = 2,
+          base_asp = 1.2)
+```
+
+### Sharir et al cell types
+
+Cell types from 
+https://www.nature.com/articles/s41556-019-0378-2
+
+
+```{r}
+library(clustifyr)
+library(ComplexHeatmap)
+download.file("https://static-content.springer.com/esm/art%3A10.1038%2Fs41556-019-0378-2/MediaObjects/41556_2019_378_MOESM3_ESM.xlsx", "../docs/sharir_et_al.xlsx")
+
+mkrs <- readxl::read_excel("../docs/sharir_et_al.xlsx", 
+                           skip = 1) %>% 
+  select(-1, -ends_with("_FC")) 
+
+res <- clustify_lists(sobj,  
+                      marker = mkrs, 
+                      cluster_col = "cell_type", 
+               seurat_out = FALSE, 
+               metric = "hyper")
+
+hmap <- plot_cor_heatmap(res, 
+                 legend_title = "-log10\n(p-value)", 
+                 col = viridis::viridis(256),
+                 column_title = "Sharir et al cell types",
+                 row_title = "Our cell types",
+                 column_title_side = "bottom")
+
+pdf(file.path(fig_dir, "sharir_et_all_cell_type_overlap_heatmap.pdf"),
+    width = 7,
+    height = 4)
+  draw(hmap)
+dev.off()
+```
+
+Plot out all as umaps
+
+```{r}
+list_to_plot <- mkrs %>% 
+  mutate(top_x = row_number()) %>% 
+  pivot_longer(cols = -top_x) %>% 
+  split(., .$name)  %>% 
+  map(., ~arrange(.x, top_x) %>% 
+        dplyr::slice(1:12) %>% 
+        dplyr::pull(value))
+
+plts <- imap(list_to_plot, ~plot_umap(sobj, 
+                             .x,
+                             minimal_theme = TRUE)  %>% 
+       plot_grid(plotlist = .,
+                 nrow = 3, 
+                 ncol = 4)) 
+
+dir.create(file.path(fig_dir, "sharir_et_al_marker_umaps"))
+iwalk(plts, ~save_plot(file.path(fig_dir,
+                                 "sharir_et_al_marker_umaps", str_c(make.names(.y),
+                                                                    ".pdf")), 
+                      .x,
+                      nrow = 3,
+                      ncol = 4,
+                      base_asp = 1))
+```
+
+### Add as a module score for our data
+
+```{r}
+list_to_plot <- mkrs %>% 
+  mutate(top_x = row_number()) %>% 
+  pivot_longer(cols = -top_x) %>% 
+  split(., .$name)  %>% 
+  map(., ~arrange(.x, top_x) %>% 
+        dplyr::pull(value))
+
+#drop cell cycle lists
+list_to_plot <- list_to_plot[setdiff(names(list_to_plot), c("M/G1", "S", "G2/M"))]
+
+names(list_to_plot) <- str_c("Sharir_et_al_", names(list_to_plot))
+
+for (i in seq_along(list_to_plot)){
+  sobj <- AddModuleScore(sobj, 
+                       features = list(c(list_to_plot[[i]])),
+                       ctrl = 100,
+                       name = names(list_to_plot)[i],
+                       seed = 42)
+}
+
+new_ids <- str_c(make.names(names(list_to_plot)), "1") 
+
+new_id_idx <- match(new_ids, colnames(sobj@meta.data))
+colnames(sobj@meta.data)[new_id_idx] <- names(list_to_plot)
+```
+  
+  
+```{r}
+plts <- plot_umap(sobj, 
+          str_subset(colnames(sobj@meta.data), 
+                           "Sharir_et_al"),
+          show_negative = TRUE) 
+
+p <- plot_grid(plotlist = plts, 
+               nrow = 3,
+               ncol = 4)
+
+p
+save_plot(file.path(fig_dir, "sharir_et_al_cluster_signatures.pdf"),
+          p,
+          nrow = 3,
+          ncol = 4,
+          base_asp = 1.2)
+```
+
+
 ### Genotype
 
 ```{r}
 sobj$clusters <- as.character(sobj$clusters)
-p <- plot_features_split(sobj, "sample", "sample", add_title = FALSE) +
-  theme(legend.position = "none")
+p <- plot_umap(sobj, "clusters", group = "sample", 
+               label_text = TRUE,
+               legend_title = "") 
 p
 
 save_plot(file.path(fig_dir, 
-                    "umap_by_sample.pdf"),
-          p,nrow =1, ncol = 2,
+                    "umap_by_cluster_split_sample.pdf"),
+          p,nrow = 1, ncol = 2,
           base_asp = 1.0)
 ```
 
@@ -327,6 +472,37 @@ save_plot(file.path(fig_dir,
           base_asp = 1.3)
 
 ```
+
+```{r}
+plt_dat <- get_metadata(sobj) %>% 
+  group_by(clusters, sample) %>% 
+  mutate(total_cells = n()) %>% 
+  group_by(clusters, sample, Phase, total_cells) %>% 
+  summarize(n = n(),
+            percent = 100 * (n / unique(total_cells))) %>% 
+  ungroup() %>% 
+  mutate(Phase = factor(Phase, levels = c(
+    "G1",
+    "S",
+    "G2M"
+  )))
+
+p <- ggplot(plt_dat, aes(Phase, percent)) + 
+  geom_col(aes(fill = sample),
+          position = position_dodge2()) +
+  facet_grid(~clusters) +
+  scale_fill_manual(name = "",
+                    values = discrete_palette_default) +
+  labs(x = "", y = "Percent of cells\n in each phase") + 
+  theme(legend.position = "top")
+  
+save_plot(file.path(fig_dir, 
+                    "barplot_by_cell_cyle.pdf"),
+          p,
+          base_asp = 2.5)
+
+```
+
 ### Clustering overview
 
 ```{r}
@@ -401,15 +577,18 @@ save_plot(file.path(fig_dir,
 
 ## Cell proportions
 
-## Cell proportions
 
 ```{r}
 plt_dat <- sobj@meta.data %>% 
   group_by(sample) %>% 
   mutate(total_cells = n()) %>% 
   group_by(sample, cell_type) %>% 
-  summarize(percent_of_cells = 100 * n() / unique(total_cells)) %>% 
-  spread(sample, percent_of_cells)
+  summarize(n_cells = n(), 
+            total_cells = unique(total_cells),
+            percent_of_cells = 100 * n_cells / total_cells) %>% 
+  pivot_wider(names_from = sample, values_from = c(n_cells, percent_of_cells, total_cells))
+
+# prop.test(x = plt_dat$n_cells_mutant[1], plt_dat$total_cells_mutant[1], p = plt_dat$percent_of_cells_control[1] / 100)
 
 p <- plt_dat %>% 
   gather(genotype, percent, -cell_type) %>% 
@@ -432,6 +611,201 @@ save_plot(file.path(fig_dir,
 
 
 
+```{r}
+p <- plot_cell_proportions(sobj, "cell_type",
+                      "sample", 
+                      cols = palette_OkabeIto) +
+  labs(fill = "",
+       x = "")
+p
+save_plot(file.path(fig_dir, 
+                    "barplot_cell_proportions.pdf"),
+          p,
+          base_asp = 0.75,
+          base_height = 6)
+```
+
+## Cytotrace 
+
+```{r}
+mat <- as.matrix(sobj@assays$RNA@counts)
+source("../../eickelberg/lung-rejection/R/CytoTRACE.R")
+a <- CytoTRACE(mat, ncores = 4)
+
+res <- tibble(
+  cell = names(a$GCS),
+  GCS = a$GCS,
+  CytoTRACE = a$CytoTRACE) %>% 
+  left_join(get_metadata(sobj), ., by = "cell") %>% 
+  select(cell, GCS, CytoTRACE) %>% 
+  mutate(GCS = ifelse(is.na(GCS), 0, GCS),
+         CytoTRACE = ifelse(is.na(CytoTRACE), -1, CytoTRACE)) %>% 
+  column_to_rownames("cell")
+
+sobj <- AddMetaData(sobj, res)
+```
+
+```{r}
+p3 <- plot_umap(sobj, "nFeature_RNA")
+p2 <- plot_umap(sobj, "CytoTRACE")
+p1 <- plot_umap(sobj, "Phase")
+
+p <- plot_grid(p1, p2, p3, nrow = 1)
+
+p
+save_plot(file.path(fig_dir, 
+                    "umap_cytotrace.pdf"),
+          p, nrow = 1, ncol = 3,
+          base_asp = 1.2)
+```
+
+## General # of UMIs and genes per cell type
+
+```{r}
+p1 <- plot_violin(get_metadata(sobj), 
+            "cell_type", "nCount_RNA", "cell_type",
+            cols = scale_fill_manual(values = discrete_palette_default)) + 
+  scale_y_log10() + 
+     labs(x = "",
+       y = "# of UMIs") + 
+  theme(legend.position = "none")
+
+p2 <- plot_violin(get_metadata(sobj), 
+            "cell_type", "nFeature_RNA", "cell_type",
+            cols = scale_fill_manual(values = discrete_palette_default)) +  
+  scale_y_log10() + 
+  labs(x = "",
+       y = "# of Genes") + 
+  theme(legend.position = "none")
+
+p <- plot_grid(p1, p2, nrow = 1)
+
+p
+
+save_plot(
+  file.path(fig_dir, "nUMI_nGenes_per_cell_type.pdf"),
+  p,
+  nrow = 1,
+  ncol = 2,
+  base_asp = 0.75,
+  base_height = 5
+)
+```
+
+## Memo1 expression
+
+```{r}
+p <- plot_violins(sobj, "cell_type", features = "Memo1", split_by = "sample") +
+  labs(x = "",
+       fill = "")
+
+p
+
+save_plot(file.path(fig_dir, "memo1_expression.pdf"), p,
+          base_asp = 1.2, base_height = 5)
+```
+
+
+## DotPlots
+
+```{r}
+mkrs <- read_tsv("markers/ablast_subset_cell_type_markers.tsv") %>% 
+  mutate(group = factor(group, levels = levels(so@meta.data$cell_type))) %>% 
+  group_by(group) %>% 
+  slice(1:5) %>% 
+  pull(feature) %>% 
+  unique()
+
+p <- DotPlot(sobj, 
+        features = mkrs, 
+        group.by = "cell_type") + 
+   coord_flip() +
+  labs(x = "Cluster",
+       y = "") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+p
+save_plot(file.path(fig_dir, "epithelial_ameloblast_dotplot.pdf"),
+          p,
+          base_height = 9,
+          base_asp = 1.2)
+```
+
+
+#### epithelial only
+
+
+```{r}
+cell_types <- c("Krt17_progenitors",
+                "Sfrp5_TA",
+                "Tnc_quiescent",
+                "Krt15_progenitors",
+                "Notch_quiescent")
+
+so <- subset(sobj, subset = cell_type %in% cell_types)
+mkrs <- read_tsv("markers/ablast_subset_cell_type_markers.tsv") %>% 
+  filter(group %in% cell_types) %>% 
+  mutate(group = factor(group, levels = levels(so@meta.data$cell_type))) %>% 
+  group_by(group) %>% 
+  slice(1:10) %>% 
+  pull(feature) %>% 
+  unique()
+
+p <- DotPlot(so, 
+        features = mkrs, 
+        group.by = "cell_type") + 
+   coord_flip() +
+  labs(x = "Cluster",
+       y = "") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+p
+save_plot(file.path(fig_dir, "epithelial_dotplot.pdf"),
+          p,
+          base_height = 9,
+          base_asp = 1.2)
+```
+
+#### ameloblasts only
+
+```{r}
+
+cell_types <- c(
+  "Mmp20_early_ameloblast",
+  "Krt27_early_ameloblast",
+  "Mmp20_ameloblast_progenitor",
+  "Klk4_late_ameloblast")
+
+
+so <- subset(sobj, subset = cell_type %in% cell_types)
+mkrs <- read_tsv("markers/ablast_subset_cell_type_markers.tsv") %>% 
+  filter(group %in% cell_types) %>% 
+  mutate(group = factor(group, levels = levels(so@meta.data$cell_type))) %>% 
+  group_by(group) %>% 
+  slice(1:10) %>% 
+  pull(feature) %>% 
+  unique()
+
+read_tsv("markers/ablast_subset_cell_type_markers.tsv") %>% 
+  filter(group %in% cell_types) %>% 
+  View()
+
+p <- DotPlot(so, 
+        features = mkrs, 
+        group.by = "cell_type") + 
+   coord_flip() +
+  labs(x = "Cluster",
+       y = "") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+p
+save_plot(file.path(fig_dir, "ameloblast_dotplot.pdf"),
+          p,
+          base_height = 9,
+          base_asp = 1.0)
+```
+
+
 ## PAGA
 
 ```{r}
@@ -439,7 +813,9 @@ sobj <- readRDS(file.path("objects", "ablast_sobj.rds"))
 
 paga_res <- read_csv("velocity/paga_results.csv") %>% 
   as.data.frame() %>% 
-  column_to_rownames("index")
+  column_to_rownames("index") %>% 
+  select(starts_with("dpt_"), starts_with("X_"))
+
 all(rownames(paga_res) == colnames(sobj))
 
 
@@ -447,7 +823,47 @@ sobj <- AddMetaData(sobj, paga_res)
 
 ggplot(sobj@meta.data, 
        aes(`X_draw_graph_fa-0`, `X_draw_graph_fa-1`)) +
-  geom_point(aes(color = as.character(clusters)))
+  geom_point(aes(color = clusters))
+```
+
+```{r}
+pumap_embeddings <- as.matrix(sobj@meta.data[c("X_umap-0",
+                                            "X_umap-1")])
+colnames(pumap_embeddings) <- c("paga_umap_1",
+                             "paga_umap_2")
+fa_dim <- CreateDimReducObject(
+    embeddings = pumap_embeddings,
+    assay = "RNA",
+    key = "pagaUMAP"
+  )
+
+sobj[["paga_umap"]] <- fa_dim
+plot_feature(sobj, "clusters", embedding = "paga_umap")
+
+## FD graph
+fa_embeddings <- as.matrix(sobj@meta.data[c("X_draw_graph_fa-0",
+                                            "X_draw_graph_fa-1")])
+colnames(fa_embeddings) <- c("fdg_1",
+                             "fdg_2")
+fa_dim <- CreateDimReducObject(
+    embeddings = fa_embeddings,
+    assay = "RNA",
+    key = "pagaFDG"
+  )
+
+sobj[["paga_fdg"]] <- fa_dim
+plot_feature(sobj, "clusters", embedding = "paga_fdg")
+```
+
+```{r}
+saveRDS(sobj, file.path("objects", "ablast_sobj.rds"))
+```
+### Pseudotime genes
+
+#### All ameloblasts
+
+```{r}
+sobj <- readRDS(file.path("objects", "ablast_sobj.rds"))
 
 late_diff_axis <- c(
   "7",
@@ -461,11 +877,11 @@ so <- subset(sobj, subset = clusters %in% late_diff_axis)
 so <- FindVariableFeatures(so, nfeatures = 3000)
 genes_to_test <- VariableFeatures(so)
 cnts <- GetAssayData(so, "data")[genes_to_test, ]
-ptime <- so$dpt_pseudotime_late_diff
+ptime <- so$dpt_pseudotime
 condition <- so$sample
 
 library(gam)
-
+    
 # fit a GAM with a loess term for pseudotime
 # also use interaction term to find genes changing between genotypes
 gam_res <- apply(cnts, 1, function(z){
@@ -482,11 +898,100 @@ gam_res <- apply(cnts, 1, function(z){
   bind_rows(.id = "gene")
 
 # adjust pvalues 
-ptime_late_diff_res <- mutate(gam_res, 
+ptime_ablast_res <- mutate(gam_res, 
               qval_pt = p.adjust(pseudotime_effect, method = "fdr"),
               qval_condition = p.adjust(condition_effect, method = "fdr")) %>% 
   arrange(qval_pt)
+```
 
+#### All early diff ameloblasts
+
+```{r}
+sobj <- readRDS(file.path("objects", "ablast_sobj.rds"))
+
+late_diff_axis <- c(
+  "7",
+  "3",
+  "6"
+)
+
+so <- subset(sobj, subset = clusters %in% late_diff_axis)
+
+so <- FindVariableFeatures(so, nfeatures = 3000)
+genes_to_test <- VariableFeatures(so)
+cnts <- GetAssayData(so, "data")[genes_to_test, ]
+ptime <- so$dpt_pseudotime
+condition <- so$sample
+
+library(gam)
+    
+# fit a GAM with a loess term for pseudotime
+# also use interaction term to find genes changing between genotypes
+gam_res <- apply(cnts, 1, function(z){
+    d <- data.frame(z = z, 
+                    ptime = ptime,
+                    condition = condition)
+    tmp <- suppressWarnings(gam(z ~ lo(ptime), data=d))
+    tmp2 <- suppressWarnings(gam(z ~ lo(ptime) + lo(ptime):condition, 
+                                 data=d))
+    pseudotime_effect <- summary(tmp)[4][[1]][1, 5]
+    condition_effect <- anova(tmp, tmp2, test = "Chisq")[2, "Pr(>Chi)"]
+    data.frame(pseudotime_effect, condition_effect)
+}) %>% 
+  bind_rows(.id = "gene")
+
+# adjust pvalues 
+ptime_ablast_early_res <- mutate(gam_res, 
+              qval_pt = p.adjust(pseudotime_effect, method = "fdr"),
+              qval_condition = p.adjust(condition_effect, method = "fdr")) %>% 
+  arrange(qval_pt)
+```
+
+#### All late diff ameloblasts
+
+```{r}
+sobj <- readRDS(file.path("objects", "ablast_sobj.rds"))
+
+late_diff_axis <- c(
+  "7",
+  "8"
+)
+
+so <- subset(sobj, subset = clusters %in% late_diff_axis)
+
+so <- FindVariableFeatures(so, nfeatures = 3000)
+genes_to_test <- VariableFeatures(so)
+cnts <- GetAssayData(so, "data")[genes_to_test, ]
+ptime <- so$dpt_pseudotime
+condition <- so$sample
+
+library(gam)
+    
+# fit a GAM with a loess term for pseudotime
+# also use interaction term to find genes changing between genotypes
+gam_res <- apply(cnts, 1, function(z){
+    d <- data.frame(z = z, 
+                    ptime = ptime,
+                    condition = condition)
+    tmp <- suppressWarnings(gam(z ~ lo(ptime), data=d))
+    tmp2 <- suppressWarnings(gam(z ~ lo(ptime) + lo(ptime):condition, 
+                                 data=d))
+    pseudotime_effect <- summary(tmp)[4][[1]][1, 5]
+    condition_effect <- anova(tmp, tmp2, test = "Chisq")[2, "Pr(>Chi)"]
+    data.frame(pseudotime_effect, condition_effect)
+}) %>% 
+  bind_rows(.id = "gene")
+
+# adjust pvalues 
+ptime_ablast_late_res <- mutate(gam_res, 
+              qval_pt = p.adjust(pseudotime_effect, method = "fdr"),
+              qval_condition = p.adjust(condition_effect, method = "fdr")) %>% 
+  arrange(qval_pt)
+```
+
+#### All epithelial
+
+```{r}
 
 early_diff_axis <- c(
   "0",
@@ -501,7 +1006,7 @@ so <- subset(sobj, subset = clusters %in% early_diff_axis)
 so <- FindVariableFeatures(so, nfeatures = 3000)
 genes_to_test <- VariableFeatures(so)
 cnts <- GetAssayData(so, "data")[genes_to_test, ]
-ptime <- so$dpt_pseudotime_early_diff
+ptime <- so$dpt_pseudotime
 condition <- so$sample
 
 library(gam)
@@ -522,7 +1027,7 @@ gam_res <- apply(cnts, 1, function(z){
   bind_rows(.id = "gene")
 
 # adjust pvalues 
-ptime_early_diff_res <- mutate(gam_res, 
+ptime_epi_res <- mutate(gam_res, 
               qval_pt = p.adjust(pseudotime_effect, method = "fdr"),
               qval_condition = p.adjust(condition_effect, method = "fdr")) %>% 
   arrange(qval_pt)
@@ -530,4 +1035,567 @@ ptime_early_diff_res <- mutate(gam_res,
 
 ```
 
+```{r}
+write_tsv(ptime_ablast_res, "markers/pseudotime_ablast_trajectory.tsv")
+write_tsv(ptime_epi_res, "markers/pseudotime_epi_trajectory.tsv")
 
+write_tsv(ptime_ablast_late_res, "markers/pseudotime_ablast_7_8_trajectory.tsv")
+
+write_tsv(ptime_ablast_early_res, "markers/pseudotime_ablast_3_6_7_trajectory.tsv")
+
+```
+
+
+#### Epithelial subset
+
+```{r}
+early_diff_axis <- c(
+  "0",
+  "1",
+  "4",
+  "2",
+  "5"
+)
+
+so <- subset(sobj, subset = clusters %in% early_diff_axis)
+
+ptime_early_diff_res <- read_tsv("markers/pseudotime_epi_trajectory.tsv")
+library(ComplexHeatmap)
+cnts <- GetAssayData(ScaleData(so, 
+                               scale.max = 2.5,
+                               features = ptime_early_diff_res$gene[1:50]),
+                     "scale.data")
+
+ptime <- so$dpt_pseudotime
+condition <- so$sample
+
+matrix_to_plot <- cnts[ptime_early_diff_res$gene[1:50], ]
+
+annotations <- so@meta.data %>% 
+  rownames_to_column("cell") %>% 
+  select(cell,
+         Pseudotime = dpt_pseudotime,
+         sample,
+         clusters,
+         cell_type) %>% 
+  mutate(clusters = as.character(clusters)) %>% 
+  column_to_rownames("cell")
+
+col_fun <- circlize::colorRamp2(quantile(annotations$Pseudotime,
+                                         seq(0, 1 , 0.01)),
+                                viridis::magma(101))
+
+cluster_cols <- discrete_palette_default[1:length(unique(annotations$clusters))]
+names(cluster_cols) <- unique(annotations$clusters)
+
+cell_cols <- discrete_palette_default[1:length(unique(annotations$cell_type))]
+names(cell_cols) <- unique(annotations$cell_type)
+
+sample_cols <- palette_OkabeIto[1:length(unique(annotations$sample))]
+names(sample_cols) <- unique(annotations$sample)
+
+ha <- HeatmapAnnotation(df = annotations,
+                        col = list(Pseudotime = col_fun,
+                                   clusters = cluster_cols,
+                                   cell_type = cell_cols,
+                                   sample = sample_cols))
+
+pdf(file.path(fig_dir, "epithelial_pseudotime_heatmap.pdf"),
+    width = 7,
+    height = 9)
+
+Heatmap(as.matrix(matrix_to_plot),
+        col = viridis::viridis(256),
+        name = "Z-scores",
+        show_column_dend = FALSE,
+        show_row_dend = FALSE,
+        show_column_names = FALSE,
+         top_annotation = ha,
+        column_order = names(sort(ptime)))
+
+dev.off()
+```
+
+#### Ameloblast subset
+
+```{r}
+late_diff_axis <- c(
+  "7",
+  "8",
+  "3",
+  "6"
+)
+
+so <- subset(sobj, subset = clusters %in% late_diff_axis)
+ptime_late_diff_res <- read_tsv("markers/pseudotime_ablast_trajectory.tsv")
+library(ComplexHeatmap)
+cnts <- GetAssayData(ScaleData(so, 
+                               features = ptime_late_diff_res$gene[1:50]),
+                     "scale.data")
+# clip_val <- 2.5
+# cnts[cnts > clip_val] <- clip_val
+# cnts[cnts < -clip_val] <- -clip_val
+
+ptime <- so$dpt_pseudotime
+condition <- so$sample
+
+matrix_to_plot <- cnts[ptime_late_diff_res$gene[1:50], ]
+
+
+annotations <- so@meta.data %>% 
+  rownames_to_column("cell") %>% 
+  select(cell,
+         Pseudotime = dpt_pseudotime,
+         sample,
+         clusters,
+         cell_type) %>% 
+  mutate(clusters = as.character(clusters)) %>% 
+  column_to_rownames("cell")
+
+col_fun <- circlize::colorRamp2(quantile(annotations$Pseudotime,
+                                         seq(0, 1 , 0.01)),
+                                viridis::magma(101))
+
+cluster_cols <- discrete_palette_default[1:length(unique(annotations$clusters))]
+names(cluster_cols) <- unique(annotations$clusters)
+
+cell_cols <- discrete_palette_default[1:length(unique(annotations$cell_type))]
+names(cell_cols) <- unique(annotations$cell_type)
+
+sample_cols <- palette_OkabeIto[1:length(unique(annotations$sample))]
+names(sample_cols) <- unique(annotations$sample)
+
+ha <- HeatmapAnnotation(df = annotations,
+                        col = list(Pseudotime = col_fun,
+                                   clusters = cluster_cols,
+                                   cell_type = cell_cols,
+                                   sample = sample_cols))
+
+pdf(file.path(fig_dir, "ameloblast_pseudotime_heatmap.pdf"),
+    width = 7,
+    height = 9)
+
+Heatmap(as.matrix(matrix_to_plot),
+        col = viridis::viridis(256),
+        name = "Z-scores",
+        show_column_dend = FALSE,
+        show_row_dend = FALSE,
+        show_column_names = FALSE,
+         top_annotation = ha,
+        column_order = names(sort(ptime)))
+
+dev.off()
+```
+
+
+
+```{r}
+late_diff_axis <- c(
+  "7",
+  "8"
+)
+
+so <- subset(sobj, subset = clusters %in% late_diff_axis)
+ptime_late_diff_res <- read_tsv("markers/pseudotime_ablast_7_8_trajectory.tsv")
+library(ComplexHeatmap)
+cnts <- GetAssayData(ScaleData(so, 
+                               features = ptime_late_diff_res$gene[1:50]),
+                     "scale.data")
+clip_val <- 2.5
+cnts[cnts > clip_val] <- clip_val
+cnts[cnts < -clip_val] <- -clip_val
+
+ptime <- so$dpt_pseudotime
+condition <- so$sample
+
+matrix_to_plot <- cnts[ptime_late_diff_res$gene[1:50], ]
+
+
+annotations <- so@meta.data %>% 
+  rownames_to_column("cell") %>% 
+  select(cell,
+         Pseudotime = dpt_pseudotime,
+         sample,
+         clusters,
+         cell_type) %>% 
+  mutate(clusters = as.character(clusters)) %>% 
+  column_to_rownames("cell")
+
+col_fun <- circlize::colorRamp2(quantile(annotations$Pseudotime,
+                                         seq(0, 1 , 0.01)),
+                                viridis::magma(101))
+
+cluster_cols <- discrete_palette_default[1:length(unique(annotations$clusters))]
+names(cluster_cols) <- unique(annotations$clusters)
+
+cell_cols <- discrete_palette_default[1:length(unique(annotations$cell_type))]
+names(cell_cols) <- unique(annotations$cell_type)
+
+sample_cols <- palette_OkabeIto[1:length(unique(annotations$sample))]
+names(sample_cols) <- unique(annotations$sample)
+
+ha <- HeatmapAnnotation(df = annotations,
+                        col = list(Pseudotime = col_fun,
+                                   clusters = cluster_cols,
+                                   cell_type = cell_cols,
+                                   sample = sample_cols))
+
+pdf(file.path(fig_dir, "ameloblast_pseudotime_7_8_heatmap.pdf"),
+    width = 7,
+    height = 9)
+
+Heatmap(as.matrix(matrix_to_plot),
+        col = viridis::viridis(256),
+        name = "Z-scores",
+        show_column_dend = FALSE,
+        show_row_dend = FALSE,
+        show_column_names = FALSE,
+         top_annotation = ha,
+        column_order = names(sort(ptime)))
+
+dev.off()
+```
+
+```{r}
+late_diff_axis <- c(
+  "7",
+  "3",
+  "6"
+)
+
+so <- subset(sobj, subset = clusters %in% late_diff_axis)
+ptime_late_diff_res <- read_tsv("markers/pseudotime_ablast_3_6_7_trajectory.tsv")
+library(ComplexHeatmap)
+cnts <- GetAssayData(ScaleData(so, 
+                               features = ptime_late_diff_res$gene[1:50]),
+                     "scale.data")
+ clip_val <- 2.5
+ cnts[cnts > clip_val] <- clip_val
+ cnts[cnts < -clip_val] <- -clip_val
+
+ptime <- so$dpt_pseudotime
+condition <- so$sample
+
+matrix_to_plot <- cnts[ptime_late_diff_res$gene[1:50], ]
+
+
+annotations <- so@meta.data %>% 
+  rownames_to_column("cell") %>% 
+  select(cell,
+         Pseudotime = dpt_pseudotime,
+         sample,
+         clusters,
+         cell_type) %>% 
+  mutate(clusters = as.character(clusters)) %>% 
+  column_to_rownames("cell")
+
+col_fun <- circlize::colorRamp2(quantile(annotations$Pseudotime,
+                                         seq(0, 1 , 0.01)),
+                                viridis::magma(101))
+
+cluster_cols <- discrete_palette_default[1:length(unique(annotations$clusters))]
+names(cluster_cols) <- unique(annotations$clusters)
+
+cell_cols <- discrete_palette_default[1:length(unique(annotations$cell_type))]
+names(cell_cols) <- unique(annotations$cell_type)
+
+sample_cols <- palette_OkabeIto[1:length(unique(annotations$sample))]
+names(sample_cols) <- unique(annotations$sample)
+
+ha <- HeatmapAnnotation(df = annotations,
+                        col = list(Pseudotime = col_fun,
+                                   clusters = cluster_cols,
+                                   cell_type = cell_cols,
+                                   sample = sample_cols))
+
+pdf(file.path(fig_dir, "ameloblast_pseudotime_3_7_6_heatmap.pdf"),
+    width = 7,
+    height = 9)
+
+Heatmap(as.matrix(matrix_to_plot),
+        col = viridis::viridis(256),
+        name = "Z-scores",
+        show_column_dend = FALSE,
+        show_row_dend = FALSE,
+        show_column_names = FALSE,
+         top_annotation = ha,
+        column_order = names(sort(ptime)))
+
+dev.off()
+```
+
+
+
+```{r}
+p <- plot_feature(sobj, 
+             "dpt_pseudotime", embedding = "paga_umap",
+             legend_title = "Pseudotime") +
+  labs(x = "PAGA-UMAP-1",
+       y = "PAGA-UMAP-2")
+p
+save_plot(file.path(fig_dir, "paga_pseudotime_umap.pdf"), p, base_asp = 1.4)
+```
+
+
+
+
+## Try other pseudotime approaches
+
+
+#### diffusion maps
+
+All data 
+
+```{r}
+library(destiny)
+
+logcounts <- GetAssayData(sobj, "scale.data")
+
+# transpose matrix (genes as columns, cells as rows)
+input_matrix <- Matrix::t(logcounts[VariableFeatures(sobj), ])
+
+set.seed(42)
+dm <- DiffusionMap(as.matrix(input_matrix))
+
+plot(dm, 2:3, col = sobj$cell_type)
+
+dpt <- DPT(dm)
+
+plot(dpt)
+
+sobj@reductions$dm <-  CreateDimReducObject(
+  embeddings = dm@eigenvectors,
+  assay = "RNA",
+  key = "DM_")
+```
+
+Late diff axis
+```{r}
+library(destiny)
+late_diff_axis <- c(
+  "7",
+  "8",
+  "3",
+  "6"
+)
+
+so <- subset(sobj, subset = clusters %in% late_diff_axis)
+
+so <- FindVariableFeatures(so, nfeatures = 2000)
+so <- ScaleData(so)
+
+logcounts <- GetAssayData(so, "scale.data")
+
+# transpose matrix (genes as columns, cells as rows)
+input_matrix <- Matrix::t(logcounts[VariableFeatures(so), ])
+
+set.seed(42)
+dm <- DiffusionMap(as.matrix(input_matrix))
+
+plot(dm, 1:2, col = so$cell_type)
+
+dpt <- DPT(dm)
+
+plot(dpt, 2, paths_to = c(1), col_path = c("black", "black"))
+
+plot(dpt, 2, paths_to = c(1), col = so$cell_type)
+
+so@reductions$dm <-  CreateDimReducObject(
+  embeddings = dm@eigenvectors,
+  assay = "RNA",
+  key = "DM_")
+```
+
+Early
+
+```{r}
+early_diff_axis <- c(
+  "0",
+  "1",
+  "4",
+  "2",
+  "5"
+)
+
+so <- subset(sobj, subset = clusters %in% early_diff_axis)
+
+so <- FindVariableFeatures(so, nfeatures = 2000)
+so <- ScaleData(so)
+
+logcounts <- GetAssayData(so, "scale.data")
+
+# transpose matrix (genes as columns, cells as rows)
+input_matrix <- Matrix::t(logcounts[VariableFeatures(so), ])
+
+set.seed(42)
+dm <- DiffusionMap(as.matrix(input_matrix))
+
+plot(dm, 1:2, col = so$cell_type)
+
+dpt <- DPT(dm)
+
+plot(dpt, 1, paths_to = c(1, 3), col_path = c("black", "black"))
+
+plot(dpt, 3, paths_to = c(1, 2))
+
+plot(dpt, 3, paths_to = c(1, 2), col_by = "branch")
+
+plot(dm, 1:3)
+```
+
+#### Slingshot
+all data
+
+```{r}
+library(SingleCellExperiment)
+library(slingshot)
+sce <- as.SingleCellExperiment(sobj, assay = "RNA")
+
+
+sling <- slingshot(sce, 
+                   clusterLabels = 'cell_type', 
+                   reducedDim = 'DM',
+                   approx_points = 100)
+
+colors <- colorRampPalette(brewer.pal(11,'Spectral')[-6])(100)
+
+plotcol <- colors[cut(sling$slingPseudotime_1, breaks=100)]
+
+plot(reducedDims(sling)$DM, col = plotcol, pch=16, asp = 1)
+
+lines(SlingshotDataSet(sling), lwd=2, col='black')
+
+
+sobj$sling
+```
+
+late axis
+
+```{r}
+library(SingleCellExperiment)
+library(slingshot)
+
+#Recluster
+so <- FindNeighbors(so, reduction = "dm")
+so <- FindClusters(so, resolution = 0.2)
+sce <- as.SingleCellExperiment(so, assay = "RNA")
+
+
+sling <- slingshot(sce, 
+                   clusterLabels = 'RNA_snn_res.0.2', 
+                   reducedDim = 'DM',
+                   start.clus = "0")
+
+colors <- colorRampPalette(brewer.pal(11,'Spectral')[-6])(100)
+
+plotcol <- colors[cut(sling$slingPseudotime_1, breaks=100)]
+
+plot(reducedDims(sling)$DM, col = plotcol, pch=16, asp = 1)
+
+lines(SlingshotDataSet(sling), lwd=2, col='black')
+
+
+SlingshotDataSet(sling)
+```
+
+
+
+
+# Rerun with cell cycle regressed out 
+
+
+```{r, fig.width = 6}
+so_regress <- FindVariableFeatures(sobj, 
+                             selection.method = "vst", 
+                             nfeatures = 3000, 
+                             verbose = FALSE)
+
+s_genes <- cc.genes$s.genes
+g2m_genes <- cc.genes$g2m.genes
+
+# exclude cell cycle genes from variable gene list
+cc_genes <- str_to_title(c(s_genes, g2m_genes))
+vgenes <- VariableFeatures(so_regress)
+VariableFeatures(so_regress) <- vgenes[!vgenes %in% cc_genes]
+
+so_regress <- ScaleData(so_regress, vars.to.regress =c("S.Score", "G2M.Score"),
+                  verbose = TRUE)
+
+so_regress <- RunPCA(so_regress, npcs = 40, verbose = FALSE)
+so_regress <- RunUMAP(so_regress, 
+                reduction = "pca", 
+                dims = 1:40, 
+                min.dist = 0.3, 
+                n.neighbors = 30L)
+
+so_regress <- FindNeighbors(so_regress,
+                      reduction = "pca",
+                      dims = 1:40,
+                      k.param = 20)
+
+so_regress <- FindClusters(so_regress, resolution = c(0.3, 0.2, 0.1))
+
+so_regress$clusters <- so_regress$RNA_snn_res.0.3
+so_regress$seurat_clusters <- NULL
+
+p1 <- plot_feature(sobj, "cell_type", embedding = "umap")
+p2 <- plot_feature(so_regress, "cell_type", embedding = "umap")
+
+p <- plot_grid(p1, p2)
+
+outdir <- "figs/subset/regress"
+dir.create(outdir)
+save_plot(file.path(outdir, 
+                    "umap_regress_comparison.pdf"), 
+          p, nrow = 1, ncol = 2, base_asp = 2)
+
+saveRDS(so_regress, 
+        "objects/ablast_sobj_ccregress.rds")
+```
+
+The regressed projects looks similar, although more like a butterfly. Not worth running for all analysis.
+
+## Generate pairwise DE expression profiles for ameloblast clusters
+
+```{r}
+library(presto)
+
+cell_types <- c(
+  "Mmp20_early_ameloblast",
+  "Krt27_early_ameloblast",
+  "Mmp20_ameloblast_progenitor",
+  "Klk4_late_ameloblast")
+
+```
+
+
+## Reproject without mutant cells
+
+```{r}
+seed_value <- 2020317
+so <- subset(sobj, subset = sample == "control") %>% 
+  FindVariableFeatures(selection.method = "vst", 
+                             nfeatures = 3000, 
+                             verbose = FALSE) %>% 
+  ScaleData(verbose = TRUE) %>% 
+  RunPCA(npcs = 40, 
+         verbose = FALSE, seed.use = seed_value) %>% 
+  RunUMAP(reduction = "pca", 
+                dims = 1:40, 
+                min.dist = 0.3, 
+                n.neighbors = 30L, seed.use = seed_value) %>% 
+  FindNeighbors(reduction = "pca",
+                      dims = 1:40,
+                      k.param = 20) %>% 
+  FindClusters(resolution = c(0.3, 0.2, 0.1), random.seed = seed_value)
+
+
+p <- plot_umap(so, "cell_type", legend_title = "") +
+  labs(subtitle = "Control cells only, reprojected.\nCell type labels from control + mutant analysis shown" )
+
+p
+
+save_plot(file.path(fig_dir, "umap_reproject_control_cells_only.pdf"),
+          p,
+          base_asp = 1.7)
+```
