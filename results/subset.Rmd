@@ -1566,6 +1566,22 @@ cell_types <- c(
   "Mmp20_ameloblast_progenitor",
   "Klk4_late_ameloblast")
 
+res <- map(cell_types[1:3],
+    ~wilcoxauc(sobj, 
+          group_by = "cell_type",
+          groups_use = c(.x, "Klk4_late_ameloblast")) %>% 
+  filter(padj < 0.05, 
+         pct_in > 10,
+         group == "Klk4_late_ameloblast") %>% 
+  mutate(group = str_c("Klk4_late_ameloblast_v_", .x)) %>% 
+  arrange(padj, desc(abs(logFC))))
+
+names(res) <- cell_types <- c(
+  "Mmp20_eAb_v_klk4_Ab",
+  "Krt27_eAb_v_klk4_Ab",
+  "Mmp20_prog_v_klk4_Ab")
+
+openxlsx::write.xlsx(res, file.path(mkrs_dir, "pairwise_ameloblast_markers_v_klk4_popultation.xlsx"))
 ```
 
 
