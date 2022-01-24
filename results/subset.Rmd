@@ -1615,3 +1615,33 @@ save_plot(file.path(fig_dir, "umap_reproject_control_cells_only.pdf"),
           p,
           base_asp = 1.7)
 ```
+
+### examine cluster similarities
+
+```{r}
+reid <- c(
+  "0" = "Krt17+ (0)",
+  "1" = "IEE/OEE (1)",
+  "2" = "VEE/OEE (2)",
+  "3" = "EA (3)",
+  "4" = "Krt5+ (4)",
+  "5" = "SI (5)",
+  "6" = "EA (6)",
+  "7" = "LA (7)",
+  "8" = "LA (8)")
+
+library(ComplexHeatmap)
+sobj <- readRDS(file.path("objects", "ablast_sobj.rds"))
+
+sobj$pub_cell_types <- reid[as.character(sobj$clusters)]
+
+Idents(sobj) <- "pub_cell_types"
+avg_mat <- AverageExpression(sobj)$RNA[VariableFeatures(sobj), ]
+pdf("figs/correlation_between_cell_types.pdf")
+Heatmap(cor(avg_mat, 
+            method = "spearman"),
+        col = viridis::viridis(256),
+        name = "Spearman\nCorrelation")
+dev.off()
+```
+

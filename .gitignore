@@ -11,3 +11,12 @@
 *.rds
 *.loom
 *.h5ad
+*.html
+loom
+*velocity*
+results/cellbrowser*/*
+results/markers/*
+results/dimo*
+data
+dbases
+docs

@@ -19,7 +19,7 @@ library(tidyverse)
 ```
 
 ```{R}
-cb_outdir <- "cellbrowser_v2"
+cb_outdir <- "cellbrowser_pub"
 
 def_embeddings <- function(so) {
   # keep everything except PCA
@@ -27,7 +27,7 @@ def_embeddings <- function(so) {
   reductions[!str_detect(reductions, "pca")]}
 ```
 
-# All cells
+## All cells
 
 
 ```{r}
@@ -48,13 +48,13 @@ make_cellbrowser(so,
                  # secondary_cols = c(
                  #    "subgroup",
                  #    "cell_type"), 
-                 project = "ameloblasts",
+                 project = "All-cells",
                  outdir = cb_outdir,
                  marker_file = "markers/per_cluster_markers.tsv",
                  ident = "clusters",
                  embeddings = def_embeddings(so),
                  skip_expr_matrix = TRUE,
-                 description = list(title = "Amelogenesis",
+                 description = list(title = "Mouse incisor lineages",
                                     description = "Developing mouse incisor lineages")
                  )
 ```
@@ -65,6 +65,20 @@ make_cellbrowser(so,
 ```{r}
 so <- readRDS(file.path("objects", "ablast_sobj.rds"))
 
+
+reid <- c(
+  "0" = "Krt17+ (0)",
+  "1" = "IEE/OEE (1)",
+  "2" = "VEE/OEE (2)",
+  "3" = "EA (3)",
+  "4" = "Krt5+ (4)",
+  "5" = "SI (5)",
+  "6" = "EA (6)",
+  "7" = "LA (7)",
+  "8" = "LA (8)")
+
+so$pub_cell_types <- reid[as.character(so$clusters)]
+
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
   `UMIs per cell` = "nCount_RNA",
@@ -72,111 +86,21 @@ cols_to_keep <- c(
   `clusters` = "clusters",
   `sample` = "orig.ident",
   `cell cycle phase` = "Phase",
-  `Tabula Muris cell type` = "tabula_muris_cell_type",
-  `Preliminary cell type` = "cell_type",
-  CytoTRACE = "CytoTRACE",
-  Pseudotime_early_diff = "dpt_pseudotime_early_diff",
-  Pseudotime_late_diff = "dpt_pseudotime_late_diff"
+  `cell type` = "pub_cell_types"
 )
 
-ncb_modules <- str_subset(colnames(so@meta.data), "Sharir_et_al")
-names(ncb_modules) <- ncb_modules
-
-
-cols_to_keep <- c(cols_to_keep, ncb_modules)
 
 make_cellbrowser(so, 
                  column_list = cols_to_keep,
-                 project = "ameloblasts_subset",
+                 project = "Ameloblasts",
                  outdir = cb_outdir,
                  marker_file = "markers/ablast_subset_cell_type_markers.tsv",
-                 ident = "Preliminary cell type",
+                 ident = "cell type",
                  embeddings = c("umap", "paga_umap", "paga_fdg"),
                  skip_expr_matrix = TRUE,
-                 description = list(title = "Ameloblast lineage",
-                                    description = "Subset of cells involved in ameloblast differentiation"),
+                 description = list(title = "Ameloblast lineages",
+                                    description = "Developing ameloblast lineages"),
                  config = list(priority = 1)
-                 )
-```
-
-
-## Just ameloblasts early
-
-
-```{r}
-so <- qs::qread(file.path("objects", "ameloblast_early_diff.rds"))
-
-cols_to_keep <- c(
-  `genes per cell` = "nFeature_RNA",
-  `UMIs per cell` = "nCount_RNA",
-  `percent of UMIs as mitochondria` = "percent.mt",
-  `clusters` = "refined_ameloblast_early_clusters",
-  `sample` = "orig.ident",
-  `cell cycle phase` = "Phase",
-  `Tabula Muris cell type` = "tabula_muris_cell_type",
-  `Preliminary cell type` = "cell_type",
-  CytoTRACE = "CytoTRACE",
-  Pseudotime_early_diff = "dpt_pseudotime_early_diff",
-  Pseudotime_late_diff = "dpt_pseudotime_late_diff"
-)
-
-ncb_modules <- str_subset(colnames(so@meta.data), "Sharir_et_al")
-names(ncb_modules) <- ncb_modules
-
-cols_to_keep <- c(cols_to_keep, ncb_modules)
-
-make_cellbrowser(so, 
-                 column_list = cols_to_keep,
-                 project = "ameloblasts_subset_early",
-                 outdir = cb_outdir,
-                 marker_file = "markers/ameloblast_early_diff_only/refined_ameloblast_early_clusters.tsv",
-                 ident = "clusters",
-                 embeddings = c("harmony_umap"),
-                 skip_expr_matrix = FALSE,
-                 description = list(title = "Ameloblast lineage",
-                                    description = "Subset of cells involved in ameloblast differentiation"),
-                 config = list(priority = 3)
-                 )
-```
-
-
-## Just ameloblasts late
-
-
-```{r}
-so <- qread(file.path("objects", "ameloblast_late_diff.rds"))
-
-cols_to_keep <- c(
-  `genes per cell` = "nFeature_RNA",
-  `UMIs per cell` = "nCount_RNA",
-  `percent of UMIs as mitochondria` = "percent.mt",
-  `clusters` = "refined_ameloblast_clusters",
-  `sample` = "orig.ident",
-  `cell cycle phase` = "Phase",
-  `Tabula Muris cell type` = "tabula_muris_cell_type",
-  `Preliminary cell type` = "cell_type",
-  CytoTRACE = "CytoTRACE",
-  Pseudotime_early_diff = "dpt_pseudotime_early_diff",
-  Pseudotime_late_diff = "dpt_pseudotime_late_diff"
-)
-
-ncb_modules <- str_subset(colnames(so@meta.data), "Sharir_et_al")
-names(ncb_modules) <- ncb_modules
-
-
-cols_to_keep <- c(cols_to_keep, ncb_modules)
-
-make_cellbrowser(so, 
-                 column_list = cols_to_keep,
-                 project = "ameloblasts_subset_late",
-                 outdir = cb_outdir,
-                 marker_file = "markers/ameloblast_late_diff_only/refined_ameloblast_clusters.tsv",
-                 ident = "clusters",
-                 embeddings = c("harmony_umap"),
-                 skip_expr_matrix = FALSE,
-                 description = list(title = "Ameloblast lineage",
-                                    description = "Subset of cells involved in late ameloblast differentiation"),
-                 config = list(priority = 4)
                  )
 ```
 
@@ -184,17 +108,48 @@ make_cellbrowser(so,
 ## Build all
 
 ```{r}
+library(glue)
+write_config <- function(x, path){
+  glue('{key}="{value}"', 
+     key = names(x), 
+     value = x) %>% 
+    write_lines(path)
+}
+
+collection_cb <- c(shortLabel="Single cell RNA-seq characterization of ameloblast differentiation")
+
+collection_desc <- c(title="Single cell RNA-seq characterization of ameloblast differentiation",
+                     abstract="Coordinated mineralization of soft tissue is central to organismal form and function, while dysregulated mineralization underlies several human pathologies. Oral epithelial derived ameloblasts are polarized, secretory cells responsible for generating enamel, the most mineralized substance in the human body. Defects in ameloblast development result in enamel anomalies, including amelogenesis imperfecta. Identifying proteins critical in ameloblast development can provide insight into specific pathologies associated with enamel related disorders or more broadly, mechanisms of mineralization. Previous studies identified a role for MEMO1 in bone mineralization; however, whether MEMO1 functions in the generation of additional mineralized structures remains unknown. Here, we identify a critical role for MEMO1 in enamel mineralization. First, we identified that Memo1 is expressed in ameloblasts and that conditional deletion of Memo1 from ameloblasts results in enamel defects, characterized by a decline in mineral density and tooth integrity. Using the 10x Genomics single-cell RNA-seq platform, we characterized ameloblasts and their progenitors in Memo1 oral epithelial mutants, which revealed a disruption to cytoskeletal associated genes and a reduction in late stage ameloblast markers, relative to controls. ",
+                     unitDesc="Log-normalized counts")
+
+write_config(collection_cb, file.path(cb_outdir, "cellbrowser.conf"))
+write_config(collection_desc, file.path(cb_outdir, "desc.conf"))
+
+cb_conf <- read_lines("~/.cellbrowser.conf") %>% 
+  str_subset("dataRoot") %>% 
+  str_split("=") %>% 
+  .[[1]] %>% 
+  .[2] %>% 
+  gsub('\"', "", .)
+
+if(cb_outdir != cb_conf ) {
+  write_lines(paste0('dataRoot="', 
+                     normalizePath(cb_outdir), '"'),
+              "~/.cellbrowser.conf")
+}
+```
+
+```{r}
 cb_dirs <- c(
-  "ameloblasts_subset",
-  "ameloblasts",
-  "ameloblasts_subset_early",
-  "ameloblasts_subset_late"
+  "All-cells",
+  "Ameloblasts"
 )
 cb_dirs <- file.path(cb_outdir, 
                      cb_dirs,
                      "cellbrowser.conf")
 
 build_cellbrowser(cb_dirs, 
-                  file.path(cb_outdir, "ablast"))
+                  file.path(cb_outdir, "ablast"),
+                  cbBuild_path = '/miniconda3/bin/cbBuild')
   
 ```
