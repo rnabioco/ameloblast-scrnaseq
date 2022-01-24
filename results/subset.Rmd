@@ -43,8 +43,8 @@ walk(c(fig_dir,mkrs_dir), dir.create, showWarnings = F)
  
 #reticulate::use_python("/miniconda3/envs/py37/bin/python", required = TRUE)
 #reticulate::use_condaenv("py37", required = TRUE)
-Sys.setenv(RETICULATE_PYTHON = "/miniconda3/envs/py37/bin/python")
-reticulate::import("louvain")
+#Sys.setenv(RETICULATE_PYTHON = "/miniconda3/envs/py37/bin/python")
+#reticulate::import("louvain")
 ```
 
 ```{r}
@@ -1643,5 +1643,22 @@ Heatmap(cor(avg_mat,
         col = viridis::viridis(256),
         name = "Spearman\nCorrelation")
 dev.off()
+```
+
+regenerate marker lists using updated ids, should be identical just with new group names. 
+
+```{r}
+library(presto)
+cell_type_markers <- wilcoxauc(sobj, "pub_cell_types")
+
+cell_type_markers <- dplyr::filter(cell_type_markers, 
+                                   logFC > 0,
+                                   padj < 0.01, 
+                                   pct_in > 10) %>%   
+  dplyr::group_by(group) %>% 
+  dplyr::arrange(padj, desc(logFC), .by_group = TRUE)
+
+write_tsv(cell_type_markers,
+          file.path(mkrs_dir, "ablast_subset_pub_cell_type_markers.tsv"))
 ```
 
