@@ -1,0 +1,782 @@
+---
+title: "Ameloblast analysis"
+author: "Kent Riemondy RBI"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    theme: cosmo
+    highlight: tango
+    fig_caption: true
+    code_folding: hide
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+```
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+library(scbp)
+library(tidyverse)
+library(cowplot); theme_set(theme_cowplot())
+library(here)
+library(Seurat)
+
+fig_dir <- "figs-v2"
+mkrs_dir <- "markers-v2"
+walk(c(fig_dir,mkrs_dir), dir.create, showWarnings = F)
+```
+
+## Reanalyze ameloblasts
+
+Extract out ameloblast lineages from other cell types
+
+```{r}
+sobj <- readRDS(file.path("objects", "sobj.rds"))
+```
+
+```{r,}
+if(!"v2_refined_clusters" %in% colnames(sobj@meta.data)){
+  sobj <- FindClusters(sobj, resolution = 0.7)
+  sobj$v2_refined_clusters <- sobj$seurat_clusters
+  saveRDS(sobj, file.path("objects", "sobj.rds"))
+}
+
+```
+
+```{r}
+p <- plot_umap(sobj, 
+          c("v2_refined_clusters"), 
+          label_text = T,
+          label_color = 'black', 
+          ggrepel_opts = list(force = 0),
+          label_size = 4,
+          minimal_theme = T)
+
+p
+save_plot(file.path(fig_dir, "3b_clustering-all-cells.pdf"), p,
+          base_asp = 1.2)
+```
+
+
+```{r}
+p <- plot_violins(sobj, 
+             group = "v2_refined_clusters",
+             features = c("Krt14", "Krt5"),
+             cols = c(discrete_palette_default, 
+                      palette_OkabeIto,
+                      ilovehue_pal))
+
+p
+save_plot(file.path(fig_dir, "epithelial-markers-all-cells.pdf"), p,
+          base_asp = 1.5,
+          base_height = 5)
+```
+
+```{r}
+library(presto)
+v2_type_markers <- wilcoxauc(sobj, "v2_refined_clusters")
+
+v2_type_markers <- dplyr::filter(v2_type_markers, 
+                                   logFC > 0,
+                                   padj < 0.01, 
+                                   pct_in > 10) %>%   
+  dplyr::group_by(group) %>% 
+  dplyr::arrange(padj, desc(logFC), .by_group = TRUE)
+
+write_tsv(v2_type_markers, file.path(mkrs_dir, "all_cells_v2_refined_cluster_markers.tsv"))
+```
+
+```{r}
+ids <- c(2,
+         12,
+         14,
+         16,
+         19,
+         20,
+         24,
+         25)
+
+ids <- as.character(ids)
+
+cells <- rownames(sobj@meta.data)[sobj@meta.data$v2_refined_clusters %in% ids]
+sobj$cell_lineage <- ifelse(colnames(sobj) %in% cells,
+                            "ameloblast",
+                            "other")
+p <- plot_umap(sobj, "cell_lineage")
+
+p
+save_plot(file.path(fig_dir, "classification-all-cells.pdf"), p,
+          base_asp = 1.5,
+          base_height = 5)
+```
+
+
+
+
+```{r}
+so_amel_fn <- file.path("objects", "ablast_sobj_v2.rds")
+if(!file.exists(so_amel_fn)){
+  so_amel <- sobj[, cells]
+  so_amel <- FindVariableFeatures(so_amel, 
+                             selection.method = "vst", 
+                             nfeatures = 2000, 
+                             verbose = FALSE)
+
+  so_amel <- ScaleData(so_amel, 
+                  verbose = TRUE)
+
+  so_amel <- RunPCA(so_amel, npcs = 40, verbose = FALSE)
+  so_amel <- RunUMAP(so_amel, 
+                reduction = "pca", 
+                dims = 1:20, 
+                min.dist = 0.3, 
+                n.neighbors = 20L)
+
+  so_amel <- FindNeighbors(so_amel,
+                      reduction = "pca",
+                      dims = 1:20,
+                      k.param = 20)
+
+  so_amel <- FindClusters(so_amel, resolution = seq(0.1, 1, 0.1))
+  so_sub <- readRDS(file.path("objects", "ablast_sobj.rds"))
+  to_add <- as.character(so_sub@meta.data[, c("clusters")])
+  names(to_add) <- Cells(so_sub)
+  so_amel$og_clusters <- ifelse(colnames(so_amel) %in% names(to_add),
+                           to_add[colnames(so_amel)],
+                           "missing-cells")
+  reid <- c(
+    "0" = "Krt17+ (0)",
+    "1" = "IEE/OEE (1)",
+    "2" = "VEE/OEE (2)",
+    "3" = "EA (3)",
+    "4" = "Krt5+ (4)",
+    "5" = "SI (5)",
+    "6" = "EA (6)",
+    "7" = "LA (7)",
+    "8" = "LA (8)")
+
+  so_amel$og_ctypes <- ifelse(so_amel$og_clusters %in% names(reid),
+                           reid[so_amel$og_clusters],
+                           "missing-cells")
+} else {
+  so_amel <- readRDS(so_amel_fn)
+}
+
+
+p <- plot_umap(so_amel, 
+               c("og_ctypes"), 
+               group = "sample", 
+               legend_title = "cell-types",
+               .cols = c(palette_OkabeIto, rev(discrete_palette_default)))
+pall <- plot_umap(so_amel,
+                  c("og_ctypes"), 
+                  legend_title = "cell-types",
+                  .cols = c(palette_OkabeIto, rev(discrete_palette_default)))
+p <- plot_grid(pall, p, nrow = 1)
+save_plot(file.path(fig_dir, "original-clustering-ameloblasts.pdf"), p,
+          base_asp = 1.4,
+          base_height = 5,
+          nrow = 1,
+          ncol = 3)
+p
+```
+
+```{r}
+to_plot <- str_subset(colnames(so_amel@meta.data), "res")
+plot_umap(so_amel, to_plot, .cols = c(palette_OkabeIto, rev(discrete_palette_default)))
+```
+
+```{r}
+so_amel$v2_clusters <- so_amel$RNA_snn_res.0.3
+
+p <- plot_umap(so_amel, 
+          c("v2_clusters"), 
+          label_text = T,
+          label_color = 'black', 
+          ggrepel_opts = list(force = 0),
+          label_size = 4,
+          minimal_theme = T,
+          .cols = c(palette_OkabeIto, rev(discrete_palette_default)))
+
+p
+save_plot(file.path(fig_dir, "3c_clustering-ameloblasts.pdf"), p,
+          base_asp = 1.2)
+```
+
+```{r}
+cell_type_markers <- wilcoxauc(so_amel, "v2_clusters")
+
+cell_type_markers <- dplyr::filter(cell_type_markers, 
+                                   logFC > 0,
+                                   padj < 0.01) %>%   
+  dplyr::group_by(group) %>% 
+  dplyr::arrange(padj, desc(logFC), .by_group = TRUE)
+
+write_markers_xlsx(split(cell_type_markers, cell_type_markers$group),
+           file.path(mkrs_dir, "ablast_subset_v2_cluster_markers.xlsx"))
+
+write_tsv(cell_type_markers,
+          file.path(mkrs_dir, "ablast_subset_v2_cluster_markers.tsv"))
+```
+
+```{r}
+p <- plot_umap(so_amel, "Memo1", sorted = "random",
+          minimal_theme = T)
+
+save_plot(file.path(fig_dir, "memo1_umap.pdf"), p,
+          base_asp = 1.2)
+p
+```
+
+
+
+```{r}
+to_plot <- c("Tuba1a", "Tubb3", "Tubb5", "Tubb6", "Rhob")
+
+p <- plot_umap(so_amel, to_plot, sorted = "random", group = "sample")
+names(p)<- to_plot
+iwalk(p, 
+      ~save_plot(file.path(fig_dir,
+                           str_c("cluster3_", 
+                                 .y, 
+                                 "_umap.pdf")),
+                  .x,
+                 base_asp = 1,
+                nrow = 1, ncol = 2))
+
+to_plot <- c("Klk4", "Odam", "Wdr72",  "Amtn", "Alpl", "Cldn1", "Fth1", "Enam")
+p <- plot_umap(so_amel, to_plot, sorted = "random", group = "sample")
+names(p)<- to_plot
+iwalk(p, 
+      ~save_plot(file.path(fig_dir,
+                           str_c("cluster7_", 
+                                 .y, 
+                                 "_umap.pdf")),
+                  .x,
+                 base_asp = 1,
+                nrow = 1, ncol = 2))
+
+to_plot <- c("Igfbp2", "Igfbp5", "Gnrh1")
+p <- plot_umap(so_amel, to_plot, sorted = "random", group = "sample")
+names(p)<- to_plot
+iwalk(p, 
+      ~save_plot(file.path(fig_dir,
+                           str_c("cluster2_", 
+                                 .y, 
+                                 "_umap.pdf")),
+                  .x,
+                 base_asp = 1,
+                nrow = 1, ncol = 2))
+
+```
+
+
+Write out metadata and save object
+
+```{r} 
+mdata_out <- get_metadata(so_amel)
+outname <- file.path("tables", paste0("ameloblast_v2_metadata_", format(Sys.Date(), "%Y_%m_%d"), ".tsv.gz"))
+write_tsv(mdata_out, outname)
+
+saveRDS(so_amel, so_amel_fn)
+```
+
+## markers between samples
+
+```{r}
+so_amel <- readRDS(so_amel_fn)
+so_amel$tmp_id <- paste0(so_amel$sample, "_cluster_", so_amel$v2_clusters)
+
+
+to_check <- c("0", "2", "3", "4", "5", "6", "7")
+mkrs_between_samples <- map(to_check, 
+    function(x) {
+      ctrl <- paste0("control_cluster_", x) 
+      mutant <- paste0("mutant_cluster_", x)
+      
+      mkrs <- wilcoxauc(so_amel, group_by = "tmp_id", groups = c(mutant, ctrl))
+      mkrs <- mkrs %>% 
+        filter(padj < 0.01,
+               group == mutant) %>% 
+        arrange(padj, desc(logFC))
+      mkrs
+    })
+
+names(mkrs_between_samples) <- paste0("mutant_vs_control_cluster_", to_check)
+
+# compare cluster 8 (mutant) to cluster (1)
+mkrs_between_samples$cluster_8_vs_cluster_1 <- wilcoxauc(so_amel,
+                                                         group_by = "v2_clusters", 
+                                                         groups = c("8", "1")) %>% 
+        filter(padj < 0.01,
+               group == "8") %>% 
+        arrange(padj, desc(logFC))
+      
+mkrs_between_samples_df <- bind_rows(mkrs_between_samples, 
+                                  .id = "cluster")
+
+write_tsv(mkrs_between_samples_df, 
+          file.path(mkrs_dir, "ablast_subset_cluster_markers_between_samples.tsv"))
+
+list_of_markers <- map(mkrs_between_samples, 
+                       ~set_xlsx_class(.x, "feature", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each sample within each ameloblast cluster. Note that cluster 8 is entirely mutant so it has instead been compared to cluster 1 (mostly wt).",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers),
+                     file.path(mkrs_dir, "ablast_subset_cluster_markers_between_samples.xlsx"))
+```
+
+## Annotate cells
+
+```{r, fig.height=9}
+library(clustifyr)
+library(clustifyrdatahub)
+library(ComplexHeatmap)
+tm_average <- ref_tabula_muris_drop()
+
+mdata <- get_metadata(so_amel)
+
+res <- clustify(so_amel@assays$RNA@data, 
+                tm_average, 
+                query_genes = so_amel@assays$RNA@var.features,
+                metadata = mdata, 
+                cluster_col = "v2_clusters", 
+                compute_method = "spearman")
+res <- t(res)
+hmap <- Heatmap(res[rowSums(res > 0.5) > 0, ], 
+                viridis::viridis(256), 
+                "Spearman\ncorrelation",
+                row_title = "Cell types from Tabula Muris",
+                column_title = "Clusters")
+
+pdf(file.path(fig_dir, "tm_cluster_hmap.pdf"), width = 8, height = 8)
+print(hmap)
+dev.off()
+```
+
+
+### Sharir et al cell types
+
+Cell types from 
+https://www.nature.com/articles/s41556-019-0378-2
+
+
+```{r}
+download.file("https://static-content.springer.com/esm/art%3A10.1038%2Fs41556-019-0378-2/MediaObjects/41556_2019_378_MOESM3_ESM.xlsx", "../docs/sharir_et_al.xlsx")
+
+mkrs <- readxl::read_excel("../docs/sharir_et_al.xlsx", 
+                           skip = 1) %>% 
+  select(-1, -ends_with("_FC")) 
+
+res <- clustify_lists(so_amel,  
+                      marker = mkrs, 
+                      cluster_col = "v2_clusters", 
+               seurat_out = FALSE, 
+               metric = "hyper")
+
+hmap <- plot_cor_heatmap(res, 
+                 legend_title = "-log10\n(p-value)", 
+                 col = viridis::viridis(256),
+                 column_title = "Sharir et al cell types",
+                 row_title = "Our cell types",
+                 column_title_side = "bottom")
+
+pdf(file.path(fig_dir, "sharir_et_all_cell_type_overlap_heatmap.pdf"),
+    width = 7,
+    height = 4)
+  draw(hmap)
+dev.off()
+```
+
+Plot out all as umaps
+
+```{r}
+list_to_plot <- mkrs %>% 
+  mutate(top_x = row_number()) %>% 
+  pivot_longer(cols = -top_x) %>% 
+  split(., .$name)  %>% 
+  map(., ~arrange(.x, top_x) %>% 
+        dplyr::slice(1:12) %>% 
+        dplyr::pull(value))
+
+plts <- imap(list_to_plot, ~plot_umap(so_amel, 
+                             .x,
+                             minimal_theme = TRUE)  %>% 
+       plot_grid(plotlist = .,
+                 nrow = 3, 
+                 ncol = 4)) 
+
+dir.create(file.path(fig_dir, "sharir_et_al_marker_umaps"))
+iwalk(plts, ~save_plot(file.path(fig_dir,
+                                 "sharir_et_al_marker_umaps", str_c(make.names(.y),
+                                                                    ".pdf")), 
+                      .x,
+                      nrow = 3,
+                      ncol = 4,
+                      base_asp = 1))
+```
+
+### Add as a module score for our data
+
+```{r}
+list_to_plot <- mkrs %>% 
+  mutate(top_x = row_number()) %>% 
+  pivot_longer(cols = -top_x) %>% 
+  split(., .$name)  %>% 
+  map(., ~arrange(.x, top_x) %>% 
+        dplyr::pull(value))
+
+#drop cell cycle lists
+list_to_plot <- list_to_plot[setdiff(names(list_to_plot), c("M/G1", "S", "G2/M"))]
+
+names(list_to_plot) <- str_c("Sharir_et_al_", names(list_to_plot))
+
+for (i in seq_along(list_to_plot)){
+  so_amel <- AddModuleScore(so_amel, 
+                       features = list(c(list_to_plot[[i]])),
+                       ctrl = 100,
+                       name = names(list_to_plot)[i],
+                       seed = 42)
+}
+
+new_ids <- str_c(make.names(names(list_to_plot)), "1") 
+
+new_id_idx <- match(new_ids, colnames(so_amel@meta.data))
+colnames(so_amel@meta.data)[new_id_idx] <- names(list_to_plot)
+```
+  
+  
+```{r}
+plts <- plot_umap(so_amel, 
+          str_subset(colnames(so_amel@meta.data), 
+                           "Sharir_et_al"),
+          show_negative = TRUE) 
+
+p <- plot_grid(plotlist = plts, 
+               nrow = 3,
+               ncol = 4)
+
+p
+save_plot(file.path(fig_dir, "S7_sharir_et_al_cluster_signatures.pdf"),
+          p,
+          nrow = 3,
+          ncol = 4,
+          base_asp = 1.6)
+```
+
+## Various umaps
+
+```{r}
+to_plot <- c(
+  "Pitx2",
+  "Mmp20",
+  "Klk4",
+  
+  "Sfrp5",
+  "Slc12a2",
+  "Jph4",
+  
+  "Sox2",
+  "Shh",
+  "Krt15",
+  "Krt17",
+  
+  "Amelx",
+  "Ambn",
+  "Enam"
+)
+plts <- plot_umap(so_amel, to_plot, sorted = "random") %>% 
+  map(~{
+    .x +  theme(axis.ticks = element_blank(),
+                axis.line = element_blank(),
+                axis.title = element_blank(),
+                axis.text = element_blank())
+  })
+
+walk2(plts, to_plot,
+     ~save_plot(file.path(fig_dir, str_c("S7_", .y, ".pdf")),
+          .x,
+          base_asp = 1.6))
+
+```
+
+
+
+### Genotype
+
+```{r}
+so_amel$v2_clusters <- as.character(so_amel$v2_clusters)
+p <- plot_umap(so_amel, "v2_clusters", group = "sample", 
+               sorted = "random", 
+               .cols = c(palette_OkabeIto, rev(discrete_palette_default))) 
+p
+
+save_plot(file.path(fig_dir, 
+                    "3e_umap_by_cluster_split_sample.pdf"),
+          p,nrow = 1, ncol = 2,
+          base_asp = 1.0)
+```
+
+### Cell cycle phase
+
+```{r}
+p <- plot_umap(so_amel, "Phase")
+
+save_plot(file.path(fig_dir, 
+                    "3d_umap_by_cell_cyle.pdf"),
+          p,
+          base_asp = 1.3)
+p
+```
+
+```{r}
+plt_dat <- get_metadata(so_amel) %>% 
+  group_by(v2_clusters, sample) %>% 
+  mutate(total_cells = n()) %>% 
+  group_by(v2_clusters, sample, Phase, total_cells) %>% 
+  summarize(n = n(),
+            percent = 100 * (n / unique(total_cells))) %>% 
+  ungroup() %>% 
+  mutate(Phase = factor(Phase, levels = c(
+    "G1",
+    "S",
+    "G2M"
+  )))
+
+p <- ggplot(plt_dat, aes(Phase, percent)) + 
+  geom_col(aes(fill = sample),
+          position = position_dodge2()) +
+  facet_grid(~v2_clusters) +
+  scale_fill_manual(name = "",
+                    values = palette_OkabeIto) +
+  labs(x = "", y = "Percent of cells\n in each phase") + 
+  theme(legend.position = "top")
+  
+save_plot(file.path(fig_dir, 
+                    "3g_barplot_by_cell_cyle.pdf"),
+          p,
+          base_asp = 2.5)
+p
+write_csv(plt_dat, "3g_barplot_by_cell_cyle_counts.csv")
+```
+
+### Clustering overview
+
+```{r}
+so_amel$v2_clusters <- as.character(so_amel$v2_clusters)
+p <- plot_umap(so_amel, "v2_clusters",
+               label_text = TRUE, 
+               label_color = "black",
+               ggrepel_opts = list(force = 0), 
+               .cols = c(palette_OkabeIto, rev(discrete_palette_default)))
+p
+save_plot(file.path(fig_dir, 
+                    "umap_cluster.pdf"),
+          p,
+          base_asp = 1.2)
+```
+
+### Markers per cluster
+
+```{r}
+mkrs <- read_tsv(file.path(mkrs_dir, "ablast_subset_v2_cluster_markers.tsv"))
+top_n_genes <- group_by(mkrs, group) %>% 
+  arrange(padj, 
+          desc(logFC),
+          .by_group = TRUE) %>% 
+  slice(1) %>% 
+  pull(feature)
+
+p <- map2(top_n_genes, 
+         0:(length(unique(mkrs$group)) - 1),
+    ~plot_umap(so_amel, 
+               .x) +
+      labs(title = paste0("cluster ", .y))) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 3,
+            ncol = 3)
+p
+
+
+save_plot(file.path(fig_dir, 
+                    "umap_top_markers_per_cluster.pdf"),
+          p,
+          nrow = 3,
+          ncol = 3,
+          base_asp = 1.2)
+```
+
+
+```{r}
+cell_types <- c("3", "6", "4", "7")
+
+mkrs <- read_tsv(file.path(mkrs_dir, "ablast_subset_v2_cluster_markers.tsv")) %>% 
+  filter(group %in% cell_types) %>% 
+  mutate(group = factor(group, levels = cell_types)) %>%
+  group_by(group) %>% 
+  slice(1:10) %>% 
+  pull(feature) %>% 
+  unique()
+
+tmp <- subset(so_amel, subset = v2_clusters %in% cell_types)
+tmp$v2_clusters <- factor(tmp$v2_clusters, levels = cell_types)
+
+mkrs <- c(c("Odam", "Enam"), mkrs)
+p <- DotPlot(tmp, 
+        features = mkrs, 
+        group.by = "v2_clusters") + 
+   coord_flip() +
+  labs(x = "Cluster",
+       y = "") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+p
+save_plot(file.path(fig_dir, "supplemental_figure_8_v2.pdf"),
+          p,
+          base_height = 7,
+          base_asp = 1.0)
+```
+
+## Pseudotime 
+
+```{r}
+library(slingshot)
+library(scater)
+sce <- as.SingleCellExperiment(so_amel)
+reducedDim(sce, "PCA") <- reducedDim(sce, "PCA")[, 1:20]
+sce <- slingshot(sce,
+                 clusterLabels = 'v2_clusters',
+                 reducedDim = 'PCA',
+                 start.clus = "1")
+ss_embed <- embedCurves(sce, "UMAP")
+
+embedded_curves <- list()
+ptime_plots <- list()
+for(i in seq_len(ncol(ss_embed))){
+  embedded <- slingCurves(ss_embed)[[i]] # only 1 path.
+  embedded_curves[[i]] <- data.frame(embedded$s[embedded$ord,])
+  
+  p <- plotUMAP(sce, colour_by=paste0("slingPseudotime_", i)) +
+    geom_path(data=embedded_curves[[i]], aes(x=UMAP_1, y=UMAP_2), 
+              size=1.2)
+  ptime_plots[[i]] <- p
+  print(p)
+}
+
+p <- plot_grid(plotlist = ptime_plots,
+          nrow = 2, ncol = 2)
+save_plot(file.path(fig_dir, "slingshot_multiple_lineage_prediction.pdf"),
+          p,
+          nrow = 2,
+          ncol = 2,
+          base_asp = 1.3)
+p
+```
+
+```{r}
+sce <- as.SingleCellExperiment(so_amel)
+reducedDim(sce, "PCA") <- reducedDim(sce, "PCA")[, 1:20]
+
+sce <- slingshot(sce,reducedDim = 'PCA')
+ss_embed <- embedCurves(sce, "UMAP")
+
+embedded_curves <- list()
+ptime_plots <- list()
+for(i in seq_len(ncol(ss_embed))){
+  embedded <- slingCurves(ss_embed)[[i]] # only 1 path.
+  embedded_curves[[i]] <- data.frame(embedded$s[embedded$ord,])
+  
+  p <- plotUMAP(sce, colour_by=paste0("slingPseudotime_", i)) +
+    geom_path(data=embedded_curves[[i]], aes(x=UMAP_1, y=UMAP_2), 
+              size=1.2)
+  ptime_plots[[i]] <- p
+  print(p)
+}
+
+p <- plot_grid(plotlist = ptime_plots,
+          nrow = 1, ncol = 1)
+save_plot(file.path(fig_dir, "slingshot_single_lineage_prediction.pdf"),
+          p,
+          nrow = 1,
+          ncol = 1,
+          base_asp = 1.3)
+p
+```
+
+## GEO submission files
+
+```{r}
+library(DropletUtils)
+
+sobj$all_cells_cluster <- sobj$v2_refined_clusters
+
+ab_clusters <- so_amel$v2_clusters
+names(ab_clusters) <- colnames(so_amel)
+
+sobj$ameloblast_cluster <- ifelse(colnames(sobj) %in% names(ab_clusters),
+                                    ab_clusters[colnames(sobj)],
+                                    NA)
+
+mdata <- sobj@meta.data[, c("sample", "cell_lineage", "all_cells_cluster", "ameloblast_cluster")]
+
+all_umap <- sobj@reductions$umap@cell.embeddings
+
+mdata <- cbind(mdata, all_umap)
+mdata <- cbind(cell_id = rownames(mdata), mdata)
+
+amel_umap <- so_amel@reductions$umap@cell.embeddings
+colnames(amel_umap) <- paste0("ameloblast_", colnames(amel_umap))
+amel_umap <- cbind(cell_id = rownames(amel_umap), as.data.frame(amel_umap))
+
+mdata <- left_join(mdata, amel_umap, by = "cell_id")
+write_tsv(mdata, here("docs/geo/cell_metadata.tsv.gz"))
+
+stopifnot(all(colnames(sobj) == mdata$cell_id))
+
+mat <- sobj@assays$RNA@counts
+write10xCounts(here("docs/geo/matrix"), mat, overwrite = TRUE, version = "3")
+tools::md5sum(dir(here("docs/geo"), full.names = TRUE, pattern = ".gz", recursive = TRUE))
+```
+ 
+<details>
+<summary> Sessioninfo </summary>
+
+```{r}
+sessionInfo()
+```
+
+</details>
+
+

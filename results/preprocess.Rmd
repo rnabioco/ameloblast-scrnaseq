@@ -246,7 +246,7 @@ sobj$RNA_snn_res.0.5 <- NULL
 
 mkrs <- FindAllMarkers(sobj, only.pos = TRUE)
 
-write_tsv(mkrs, file.path(mkrs_dir, "per_cluster_markers.tsv"))
+#write_tsv(mkrs, file.path(mkrs_dir, "per_cluster_markers.tsv"))
 
 ```
 
@@ -274,7 +274,7 @@ Assign cell_types with clustifyr
 ```{r}
 library(clustifyr)
 library(ComplexHeatmap)
-tm_average <- readRDS("/Users/kriemo/Projects/sc_repos/vanotterloo/data/tabula_muris/TM_avg_expr.rds")
+tm_average <- readRDS(here("data/tabula_muris/TM_avg_expr.rds"))
 
 mdata <- get_metadata(sobj)
 
@@ -314,10 +314,10 @@ outname <- file.path("tables",
                      paste0("metadata_", 
                             format(Sys.Date(), "%Y_%m_%d"),
                             ".tsv.gz"))
-write_tsv(mdata_out, outname)
+#write_tsv(mdata_out, outname)
 ```
 
 ## save merged object
 ```{r}
-saveRDS(sobj, file.path("objects", "sobj.rds"))
+#saveRDS(sobj, file.path("objects", "sobj.rds"))
 ```

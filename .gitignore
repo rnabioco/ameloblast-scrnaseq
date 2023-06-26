@@ -1,4 +1,5 @@
 .Rproj.user
+*.Rproj
 .Rhistory
 .RData
 .Ruserdata
@@ -15,8 +16,9 @@
 loom
 *velocity*
 results/cellbrowser*/*
-results/markers/*
+results/markers*/*
 results/dimo*
 data
 dbases
 docs
+.DS_Store

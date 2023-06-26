@@ -16,28 +16,36 @@ Format seurat object into a cellbrowser directory suitable for html browser.
 ```{r}
 library(scbp)
 library(tidyverse)
-```
-
-```{R}
-cb_outdir <- "cellbrowser_pub"
-
-def_embeddings <- function(so) {
-  # keep everything except PCA
-  reductions <- names(so@reductions)
-  reductions[!str_detect(reductions, "pca")]}
+cb_outdir <- "cellbrowser_pub_2022-06"
 ```
 
 ## All cells
 
-
 ```{r}
 so <- readRDS(file.path("objects", "sobj.rds"))
+
+ids <- c(2,
+         12,
+         14,
+         16,
+         19,
+         20,
+         24,
+         25)
+
+ids <- as.character(ids)
+
+cells <- rownames(so@meta.data)[so@meta.data$v2_refined_clusters %in% ids]
+so$cell_lineage <- ifelse(colnames(so) %in% cells,
+                            "ameloblast",
+                            "other")
 
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
   `UMIs per cell` = "nCount_RNA",
   `percent of UMIs as mitochondria` = "percent.mt",
-  `clusters` = "clusters",
+  `clusters` = "v2_refined_clusters",
+  `cell_lineage` = "cell_lineage",
   `sample` = "orig.ident",
   `cell cycle phase` = "Phase",
   `Tabula Muris cell type` = "tabula_muris_cell_type"
@@ -45,17 +53,17 @@ cols_to_keep <- c(
 
 make_cellbrowser(so, 
                  column_list = cols_to_keep,
-                 # secondary_cols = c(
-                 #    "subgroup",
-                 #    "cell_type"), 
+                 secondary_cols = c(
+                    "sample"),
                  project = "All-cells",
                  outdir = cb_outdir,
-                 marker_file = "markers/per_cluster_markers.tsv",
+                 marker_file = "markers-v2/all_cells_v2_refined_cluster_markers.tsv",
                  ident = "clusters",
-                 embeddings = def_embeddings(so),
-                 skip_expr_matrix = TRUE,
+                 embeddings = "umap",
+                 skip_expr_matrix = FALSE,
                  description = list(title = "Mouse incisor lineages",
-                                    description = "Developing mouse incisor lineages")
+                                    description = "Developing mouse incisor lineages"),
+                 cellbrowser_dir = '/Users/kriemo/.local/bin/',
                  )
 ```
 
@@ -63,47 +71,36 @@ make_cellbrowser(so,
 
 
 ```{r}
-so <- readRDS(file.path("objects", "ablast_sobj.rds"))
-
-
-reid <- c(
-  "0" = "Krt17+ (0)",
-  "1" = "IEE/OEE (1)",
-  "2" = "VEE/OEE (2)",
-  "3" = "EA (3)",
-  "4" = "Krt5+ (4)",
-  "5" = "SI (5)",
-  "6" = "EA (6)",
-  "7" = "LA (7)",
-  "8" = "LA (8)")
-
-so$pub_cell_types <- reid[as.character(so$clusters)]
+so <- readRDS(file.path("objects", "ablast_sobj_v2.rds"))
 
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
   `UMIs per cell` = "nCount_RNA",
   `percent of UMIs as mitochondria` = "percent.mt",
-  `clusters` = "clusters",
+  `clusters` = "v2_clusters",
   `sample` = "orig.ident",
-  `cell cycle phase` = "Phase",
-  `cell type` = "pub_cell_types"
+  `cell cycle phase` = "Phase"
 )
 
 
 make_cellbrowser(so, 
                  column_list = cols_to_keep,
+                 secondary_cols = c(
+                    "clusters",
+                    "sample"),
+                 secondary_color_palette =  c(palette_OkabeIto, rev(discrete_palette_default)),
                  project = "Ameloblasts",
                  outdir = cb_outdir,
-                 marker_file = "markers/ablast_subset_pub_cell_type_markers.tsv",
-                 ident = "cell type",
-                 embeddings = c("umap", "paga_umap", "paga_fdg"),
+                 marker_file = "markers-v2/ablast_subset_v2_cluster_markers.tsv",
+                 ident = "clusters",
+                 embeddings = "umap",
                  skip_expr_matrix = TRUE,
                  description = list(title = "Ameloblast lineages",
                                     description = "Developing ameloblast lineages"),
-                 config = list(priority = 1)
+                 config = list(priority = 2), 
+                 cellbrowser_dir = '/Users/kriemo/.local/bin/',
                  )
 ```
-
 
 ## Build all
 
@@ -150,6 +147,6 @@ cb_dirs <- file.path(cb_outdir,
 
 build_cellbrowser(cb_dirs, 
                   file.path(cb_outdir, "ablast"),
-                  cbBuild_path = '/miniconda3/bin/cbBuild')
+                  cbBuild_path = '/Users/kriemo/.local/bin/cbBuild')
   
 ```
